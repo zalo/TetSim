@@ -15,6 +15,15 @@
     <body style="margin:0px; background-color:rgb(255, 255, 255); "><!--overflow:hidden; position:fixed;-->
         <h1 hidden></h1> <!-- Puts the Lighthouse Score over 90 heheh-->
 
+        <!-- Allows three.js Examples to work; could break esbuild... -->
+        <script type="importmap">
+            {
+              "imports": {
+                "three": "../node_modules/three/build/three.module.js"
+              }
+            }
+        </script>
+
         <div id="appbody" style="position: absolute;z-index: -100;">
             <script type="module" src="./src/main.js"></script>
         </div>

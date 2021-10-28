@@ -339,6 +339,7 @@ export class SoftBody {
         return a0 * a0 + a1 * a1 + a2 * a2;
     }
 
+    /// a = b x c (nr = index)
     vecSetCross(a, anr, b, bnr, c, cnr) {
         anr *= 3; bnr *= 3; cnr *= 3;
         a[anr++] = b[bnr + 1] * c[cnr + 2] - b[bnr + 2] * c[cnr + 1];
