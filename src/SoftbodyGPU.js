@@ -1,23 +1,80 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
+import { MultiTargetGPUComputationRenderer } from './MultiTargetGPUComputationRenderer.js';
 
-export class SoftBody {
+export class SoftBodyGPU {
     constructor(vertices, tetIds, tetEdgeIds, physicsParams,
-        visVerts, visTriIds, visMaterial) {
-        // physics data 
-        this.physicsParams = physicsParams;
+        visVerts, visTriIds, visMaterial, renderer) {
+        this.physicsParams = physicsParams; // Set the Uniforms using these later
 
         this.numParticles = vertices.length / 3;
-        this.numElems = tetIds.length / 4;
+        this.numElems     = tetIds.length / 4;
+        this.texDim       = Math.ceil(Math.sqrt(this.numParticles));
 
-        this.pos = vertices.slice(0);
-        this.prevPos = vertices.slice(0);
-        this.vel = new Float32Array(3 * this.numParticles);
-        this.invMass = new Float32Array(this.numParticles);
-        this.invRestPose = new Float32Array(9 * this.numElems);
-        this.invRestVolume = new Float32Array(this.numElems);
+        // Initialize the General Purpose GPU Computation Renderer
+        this.gpuCompute = new MultiTargetGPUComputationRenderer(this.texDim, this.texDim, renderer)
+
+        // Allocate static textures that are used to initialize the simulation
+        this.pos0                    = this.gpuCompute.createTexture(); // Set to vertices
+        this.vel0                    = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
+        this.invMassAndInvRestVolume = this.gpuCompute.createTexture(); // Have Mass and Rest Volume Share a Texture
+        this.invRestPoseX            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.invRestPoseY            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.invRestPoseZ            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.elemToParticlesTable    = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
+        this.particleToElemsTableA   = this.gpuCompute.createTexture(); // Maps from vertices back to the elems gbuffer for the scatter step
+        this.particleToElemsTableB   = this.gpuCompute.createTexture(); // There is more than one because a particle may have a bunch of elems sharing it
+        this.particleToElemsTableC   = this.gpuCompute.createTexture();
+        this.particleToElemsTableD   = this.gpuCompute.createTexture();
+
+        // Initialize the above textures with the appropriate data
+        this.initPhysics(this.physicsParams.density);
+
+        // The GPU Computation Renderer currently doesn't work the way I'd like it to for my simulation
+        // Need to rewrite the GPU Computation Renderer to separate "variables" (texture pairs) from passes (shaders/materials/etc.)
+        // So one variable can undergo multiple passes with different shaders
+        // TODO: REWRITE THE GPU COMPUTATION RENDERER TO WORK THE WAY I OUTLINE BELOW
+
+        // Here's how I'd like to set it up:
+        // Allocate the variables that are computed at runtime
+        this.pos     = this.gpuCompute.addVariable("texturePos"    , this.pos0);
+        this.prevPos = this.gpuCompute.addVariable("texturePrevPos", this.pos0);
+        this.vel     = this.gpuCompute.addVariable("textureVel"    , this.vel0);
+        // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
+        // (before the gather step where they are accumulated back into pos via the particleToElemsTable)
+        this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
+
+        // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
+        // 1. Copy prevPos to Pos 
+        this.gpuCompute.addPass(this.prevPos, [this.pos], copyFragShader);
+
+        // 2. XPBD Prediction/Integration
+        this.gpuCompute.addPass(this.pos, [this.vel, this.pos], xpbdIntegrateFragShader);
+
+        // 3. Gather+Enforce Element Constraints
+        this.gpuCompute.addPass(this.elems, [this.pos, this.elemToParticlesTable,
+            this.invMassAndInvRestVolume, this.invRestPoseX, this.invRestPoseY,
+            this.invRestPoseZ], gatherEnforceTetConstraintsFragShader);
+
+        // 4. Scatter Results from Elems back to Pos
+        this.gpuCompute.addPass(this.pos, [this.elems,
+            this.particleToElemsTableA, this.particleToElemsTableB, this.particleToElemsTableC,
+            this.particleToElemsTableD], scatterPosFragShader);
+
+        // 5. Enforce Collisions and Apply Grab Forces
+        this.gpuCompute.addPass(this.pos, [this.pos], grabAndCollideFragShader);
+
+        // 6. XPBD Velocity + Gravity Update
+        this.gpuCompute.addPass(this.vel, [this.pos, this.prevPos], xpbdVelocityAndGravityFragShader);
+
+        // Steps 3 and 4 are going to be the toughest
+        // Need to take special care when precomputing 
+        // ElemToParticlesTable, ParticleToElemsTable, InvMassAndInvRestVolume, and InvRestPose[3]
+        // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
+
+        // BELOW THIS POINT THE SCRIPT IS LARGELY UNCHANGED AS OF NOW
+        // TODO: Finish the implementation! ---------------------------------------------------------------------------------------
 
         this.tetIds = tetIds;
-        this.volError = 0.0;
 
         this.grabPos = new Float32Array(3);
         this.grabId = -1;
@@ -58,6 +115,8 @@ export class SoftBody {
     }
 
     initPhysics(density) {
+        // and fill in here the texture data from vertices
+
         for (let i = 0; i < this.numParticles; i++)
             this.invMass[i] = 0.0;
 
@@ -160,7 +219,7 @@ export class SoftBody {
         //C = vol - 1.0 - ((1.0 / this.physicsParams.devCompliance) / (1.0 / this.physicsParams.volCompliance));
         C = vol - 1.0 - this.physicsParams.volCompliance / this.physicsParams.devCompliance;
 
-        this.volError += vol - 1.0;
+        //this.volError += vol - 1.0;
         
         this.applyToElem(elemNr, C, this.physicsParams.volCompliance, dt);
     }
@@ -194,19 +253,17 @@ export class SoftBody {
 
     simulate(dt, physicsParams) {
         // XPBD prediction
-
         for (let i = 0; i < this.numParticles; i++) {
-            this.vecAdd(this.vel, i, [0.0, physicsParams.gravity, 0.0], 0, dt);
+            // Gravity was added at the end of the last frame
             this.vecCopy(this.prevPos, i, this.pos, i);
             this.vecAdd(this.pos, i, this.vel, i, dt);
         }
 
         // solve
 
-        this.volError = 0.0;
-        for (let i = 0; i < this.numElems; i++)
-            this.solveElem(i, dt);
-        this.volError /= this.numElems;
+        //this.volError = 0.0;
+        for (let i = 0; i < this.numElems; i++) { this.solveElem(i, dt); }
+        //this.volError /= this.numElems;
 
         // ground collision
 
@@ -235,8 +292,10 @@ export class SoftBody {
         }
 
         // XPBD velocity update
-        for (let i = 0; i < this.pos.length; i++)
+        for (let i = 0; i < this.vel.length; i++) {
             this.vecSetDiff(this.vel, i, this.pos, i, this.prevPos, i, 1.0 / dt);
+            this.vecAdd(this.vel, i, [0.0, physicsParams.gravity, 0.0], 0, dt);
+        }
     }
 
     // ----------------- end solver -----------------------------------------------------                
@@ -426,10 +485,10 @@ export class Grabber {
         this.physicsObject = null;
         this.controls = controls;
 
-        container.addEventListener( 'pointerdown', this.onPointer.bind(this), true );
-        container.addEventListener( 'pointermove', this.onPointer.bind(this), true );
-        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), true );
-        container.addEventListener( 'pointerout' , this.onPointer.bind(this), true );
+        container.addEventListener( 'pointerdown', this.onPointer.bind(this), false );
+        container.addEventListener( 'pointermove', this.onPointer.bind(this), false );
+        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), false );
+        container.addEventListener( 'pointerout' , this.onPointer.bind(this), false );
     }
     updateRaycaster(x, y) {
         var rect = this.renderer.domElement.getBoundingClientRect();
@@ -463,7 +522,7 @@ export class Grabber {
                 this.physicsObject.moveGrabbed(hit);
         }
     }
-    end(evt) {
+    end() {
         if (this.active) {
             if (this.physicsObject != null) {
                 this.physicsObject.endGrab();
@@ -471,21 +530,19 @@ export class Grabber {
             }
             this.active = false;
             this.controls.enabled = true;
-            //this.controls.onPointerUp(evt);
         }
     }
 
     onPointer(evt) {
-        //evt.preventDefault();
+        evt.preventDefault();
         if (evt.type == "pointerdown") {
             this.start(evt.clientX, evt.clientY);
             this.mouseDown = true;
         } else if (evt.type == "pointermove" && this.mouseDown) {
             if (this.active)
                 this.move(evt.clientX, evt.clientY);
-        } else if (evt.type == "pointerup" /*|| evt.type == "pointerout"*/) {
-            this.controls.enabled = true;
-            this.end(evt);
+        } else if (evt.type == "pointerup" || evt.type == "pointerout") {
+            this.end();
             this.mouseDown = false;
         }
     }

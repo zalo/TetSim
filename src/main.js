@@ -30,18 +30,17 @@ export default class Main {
 
         // Construct the physics world
         this.physicsScene = { softBodies : [] };
-        let dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, 
-            this.physicsParams, 
+        this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams, 
             dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({color: 0xf78a1d}));
-        this.physicsScene.softBodies.push(dragon);
+        this.physicsScene.softBodies.push(this.dragon);
 
         // Construct the render world
         this.world = new World(this);
         this.grabber = new Grabber(
             this.world.scene, this.world.renderer, this.world.camera,
-            this.world.container, this.world.controls);
-        this.world.scene.add(dragon.edgeMesh);
-        this.world.scene.add(dragon.visMesh);
+            this.world.container.parentElement, this.world.controls);
+        this.world.scene.add(this.dragon.edgeMesh);
+        this.world.scene.add(this.dragon.visMesh);
     }
 
     /** Update the simulation */
