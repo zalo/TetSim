@@ -26,15 +26,10 @@ export class SoftBodyGPU {
         this.particleToElemsTableC   = this.gpuCompute.createTexture();
         this.particleToElemsTableD   = this.gpuCompute.createTexture();
 
-        // Initialize the above textures with the appropriate data
+        // Fill in the above textures with the appropriate data
+        // TODO: Actually write this routine properly
         this.initPhysics(this.physicsParams.density);
 
-        // The GPU Computation Renderer currently doesn't work the way I'd like it to for my simulation
-        // Need to rewrite the GPU Computation Renderer to separate "variables" (texture pairs) from passes (shaders/materials/etc.)
-        // So one variable can undergo multiple passes with different shaders
-        // TODO: REWRITE THE GPU COMPUTATION RENDERER TO WORK THE WAY I OUTLINE BELOW
-
-        // Here's how I'd like to set it up:
         // Allocate the variables that are computed at runtime
         this.pos     = this.gpuCompute.addVariable("texturePos"    , this.pos0);
         this.prevPos = this.gpuCompute.addVariable("texturePrevPos", this.pos0);

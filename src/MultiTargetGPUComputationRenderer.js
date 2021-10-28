@@ -116,9 +116,9 @@ class MultiTargetGPUComputationRenderer {
 
         this.variables = [];
 
-        this.currentTextureIndex = 0;
-
         let dataType = FloatType;
+
+        this.passes = [];
 
         const scene = new Scene();
 
@@ -142,21 +142,18 @@ class MultiTargetGPUComputationRenderer {
 
         };
 
-        this.addVariable = function (variableName, computeFragmentShader, initialValueTexture, count) {
-
-            const material = this.createShaderMaterial(computeFragmentShader);
+        this.addVariable = function (variableName, initialValueTexture, count) {
 
             const variable = {
                 name: variableName,
                 initialValueTexture: initialValueTexture,
-                material: material,
-                dependencies: null,
                 renderTargets: [],
                 wrapS: null,
                 wrapT: null,
                 minFilter: NearestFilter,
                 magFilter: NearestFilter,
-                count: count
+                count: count,
+                currentTextureIndex: 0
             };
 
             this.variables.push(variable);
@@ -165,11 +162,15 @@ class MultiTargetGPUComputationRenderer {
 
         };
 
-        this.setVariableDependencies = function (variable, dependencies) {
+        this.addPass = function (variable, dependencies, computeFragmentShader) {
 
-            variable.dependencies = dependencies;
+            this.passes.push({
+                variable: variable,
+                material: this.createShaderMaterial(computeFragmentShader),
+                dependencies: dependencies
+            });
 
-        };
+        }
 
         this.init = function () {
 
@@ -195,15 +196,21 @@ class MultiTargetGPUComputationRenderer {
                 this.renderTexture(variable.initialValueTexture, variable.renderTargets[0]);
                 this.renderTexture(variable.initialValueTexture, variable.renderTargets[1]);
 
+            }
+
+            for (let i = 0; i < this.passes.length; i++) {
+
                 // Adds dependencies uniforms to the ShaderMaterial
+                const pass     = this.passes[i];
+                const variable = pass.variable;
                 const material = variable.material;
                 const uniforms = material.uniforms;
 
-                if (variable.dependencies !== null) {
+                if (pass.dependencies !== null) {
 
-                    for (let d = 0; d < variable.dependencies.length; d++) {
+                    for (let d = 0; d < pass.dependencies.length; d++) {
 
-                        const depVar = variable.dependencies[d];
+                        const depVar = pass.dependencies[d];
 
                         if (depVar.name !== variable.name) {
 
@@ -239,54 +246,51 @@ class MultiTargetGPUComputationRenderer {
 
             }
 
-            this.currentTextureIndex = 0;
-
             return null;
 
         };
 
         this.compute = function () {
 
-            const currentTextureIndex = this.currentTextureIndex;
-            const nextTextureIndex = this.currentTextureIndex === 0 ? 1 : 0;
+            for (let i = 0, il = this.passes.length; i < il; i++) {
 
-            for (let i = 0, il = this.variables.length; i < il; i++) {
-
-                const variable = this.variables[i];
+                const pass = this.passes[i];
+                const currentTextureIndex = pass.variable.currentTextureIndex;
+                const nextTextureIndex = currentTextureIndex === 0 ? 1 : 0;
 
                 // Sets texture dependencies uniforms
-                if (variable.dependencies !== null) {
+                if (pass.dependencies !== null) {
 
-                    const uniforms = variable.material.uniforms;
+                    const uniforms = pass.material.uniforms;
 
-                    for (let d = 0, dl = variable.dependencies.length; d < dl; d++) {
+                    for (let d = 0, dl = pass.dependencies.length; d < dl; d++) {
 
-                        const depVar = variable.dependencies[d];
+                        const depVar = pass.dependencies[d];
 
-                        uniforms[depVar.name].value = depVar.renderTargets[currentTextureIndex].texture;
+                        uniforms[depVar.name].value = depVar.renderTargets[depVar.currentTextureIndex].texture;
 
                     }
 
                 }
 
                 // Performs the computation for this variable
-                this.doRenderTarget(variable.material, variable.renderTargets[nextTextureIndex]);
+                this.doRenderTarget(pass.material, pass.variable.renderTargets[nextTextureIndex]);
+
+                pass.variable.currentTextureIndex = nextTextureIndex;
 
             }
-
-            this.currentTextureIndex = nextTextureIndex;
 
         };
 
         this.getCurrentRenderTarget = function (variable) {
 
-            return variable.renderTargets[this.currentTextureIndex];
+            return variable.renderTargets[variable.currentTextureIndex];
 
         };
 
         this.getAlternateRenderTarget = function (variable) {
 
-            return variable.renderTargets[this.currentTextureIndex === 0 ? 1 : 0];
+            return variable.renderTargets[variable.currentTextureIndex === 0 ? 1 : 0];
 
         };
 
