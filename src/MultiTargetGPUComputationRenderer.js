@@ -164,11 +164,15 @@ class MultiTargetGPUComputationRenderer {
 
         this.addPass = function (variable, dependencies, computeFragmentShader) {
 
-            this.passes.push({
+            let pass = {
                 variable: variable,
                 material: this.createShaderMaterial(computeFragmentShader),
                 dependencies: dependencies
-            });
+            };
+
+            this.passes.push(pass);
+
+            return pass;
 
         }
 
