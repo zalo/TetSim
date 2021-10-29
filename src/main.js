@@ -17,6 +17,8 @@ export default class Main {
             friction      : 1000.0,
             density       : 1000.0,
             devCompliance : 1.0/100000.0,
+            volCompliance : 0.0,
+            worldBounds   : [-2.5,-1.0, -2.5, 2.5, 10.0, 2.5],
         };
         this.gui = new GUI();
         this.gui.add(this.physicsParams, 'gravity', -100.0, 0.0, 1);
