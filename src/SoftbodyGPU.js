@@ -3,15 +3,17 @@ import { MultiTargetGPUComputationRenderer } from './MultiTargetGPUComputationRe
 
 export class SoftBodyGPU {
     constructor(vertices, tetIds, tetEdgeIds, physicsParams,
-        visVerts, visTriIds, visMaterial, renderer) {
+        visVerts, visTriIds, visMaterial, world) {
         this.physicsParams = physicsParams; // Set the Uniforms using these later
         /** @type {THREE.WebGLRenderer} */ 
-        this.renderer = renderer;
+        this.renderer = world.renderer;
 
         this.numParticles      = vertices.length / 3;
         this.numElems          = tetIds.length / 4;
-        this.texDim            = Math.ceil(Math.sqrt(this.numParticles));
+        console.log(this.numParticles, this.numElems);
+        this.texDim            = Math.ceil(Math.sqrt(this.numElems));
         this.tetPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
+        this.elemPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
         this.inputPos          = vertices.slice(0);
 
         // Initialize the General Purpose GPU Computation Renderer
@@ -42,6 +44,10 @@ export class SoftBodyGPU {
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
         // (before the gather step where they are accumulated back into pos via the particleToElemVertsTable)
         this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
+        this.debugElem1 = this.gpuCompute.addVariable("textureDebug1", this.vel0);
+        this.debugElem2 = this.gpuCompute.addVariable("textureDebug2", this.vel0);
+        this.debugElem3 = this.gpuCompute.addVariable("textureDebug3", this.vel0);
+        this.debugElem4 = this.gpuCompute.addVariable("textureDebug4", this.vel0);
 
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
@@ -81,9 +87,9 @@ export class SoftBodyGPU {
             layout(location = 2) out vec4 vert3;
             layout(location = 3) out vec4 vert4;
 
-            vec2 uvFromIndex(float index) {
-                return vec2(  mod(index,  resolution.x),
-                            floor(index / resolution.x)) / resolution.xy; }
+            vec2 uvFromIndex(int index) {
+                return vec2(  index % int(resolution.x),
+                             (index / int(resolution.x))) / (resolution - 1.0); }
 
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -96,17 +102,17 @@ export class SoftBodyGPU {
 
                 // Gather this tetrahedron's 4 vertices
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
-                vec3 vert1Pos   = texture2D( texturePos, uvFromIndex(tetIndices.x)).xyz;
-                vec3 vert2Pos   = texture2D( texturePos, uvFromIndex(tetIndices.y)).xyz;
-                vec3 vert3Pos   = texture2D( texturePos, uvFromIndex(tetIndices.z)).xyz;
-                vec3 vert4Pos   = texture2D( texturePos, uvFromIndex(tetIndices.w)).xyz;
+                vec4 vert1Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.x)));
+                vec4 vert2Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.y)));
+                vec4 vert3Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.z)));
+                vec4 vert4Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.w)));
 
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
 
-                vert1 = vec4(vert1Pos, 0);
-                vert2 = vec4(vert2Pos, 0);
-                vert3 = vec4(vert3Pos, 0);
-                vert4 = vec4(vert4Pos, 0);
+                vert1 = vert1Pos;
+                vert2 = vert2Pos;
+                vert3 = vert3Pos;
+                vert4 = vert4Pos;
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
@@ -117,53 +123,72 @@ export class SoftBodyGPU {
         this.solveElemPass.material.uniformsNeedUpdate = true;
         this.solveElemPass.material.needsUpdate = true;
 
-       // 4. Gather the particles back from the elements
-        //this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
+        // Debug: Copy the elems textures into a debug texture for reading from the GPU
+        this.copyElems1Pass = this.gpuCompute.addPass(this.debugElem1, [this.elems], `
+            out highp vec4 pc_fragColor;
+            void main()	{ pc_fragColor = texture2D( textureElem[0], gl_FragCoord.xy / resolution.xy ); }`);
+        this.copyElems2Pass = this.gpuCompute.addPass(this.debugElem2, [this.elems], `
+            out highp vec4 pc_fragColor;
+            void main()	{ pc_fragColor = texture2D( textureElem[1], gl_FragCoord.xy / resolution.xy ); }`);
+        this.copyElems3Pass = this.gpuCompute.addPass(this.debugElem3, [this.elems], `
+            out highp vec4 pc_fragColor;
+            void main()	{ pc_fragColor = texture2D( textureElem[2], gl_FragCoord.xy / resolution.xy ); }`);
+        this.copyElems4Pass = this.gpuCompute.addPass(this.debugElem4, [this.elems], `
+            out highp vec4 pc_fragColor;
+            void main()	{ pc_fragColor = texture2D( textureElem[3], gl_FragCoord.xy / resolution.xy ); }`);
+
+        // 4. Gather the particles back from the elements
+        this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
         `
-           out highp vec4 pc_fragColor;
-           uniform float dt;
-           uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
-                             particleToElemVertsTable3, particleToElemVertsTable4;
-           vec2 uvFromIndex(float index) {
-               return vec2(  mod(index,  resolution.x),
-                           floor(index / resolution.x)) / resolution.xy; }
-           vec4 elemByVertIndex(int index, vec2 uv) {
-                vec4 result = texture2D( textureElem[0], uv );
-                if (index == 1) {
-                    result = texture2D( textureElem[1], uv );
-                } else if (index == 2) {
-                    result = texture2D( textureElem[2], uv );
-                } else if (index == 3) {
-                    result = texture2D( textureElem[3], uv );
+            out highp vec4 pc_fragColor;
+            uniform float dt;
+            uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
+                              particleToElemVertsTable3, particleToElemVertsTable4;
+            vec2 uvFromIndex(int index) {
+                return vec2(  index % int(resolution.x),
+                             (index / int(resolution.x))) / (resolution - 1.0); }
+            vec4 elemByVertIndex(int index, vec2 uv) {
+                 vec4 result = texture2D( textureElem[0], uv );
+                 if (index == 1) {
+                     result = texture2D( textureElem[1], uv );
+                 } else if (index == 2) {
+                     result = texture2D( textureElem[2], uv );
+                 } else if (index == 3) {
+                     result = texture2D( textureElem[3], uv );
+                 }
+                 return result;
+            }
+            void main()	{
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+                vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
+                //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
+                //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
+                //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
+
+                vec4 sumVertex = vec4(0.0);
+                for(int i = 0; i < 4; i++) {
+                    if(vertIndices1[i] > 0.0) {
+                        int   elemId = int(vertIndices1[i]) / 4;
+                        int   vertId = int(vertIndices1[i]) % 4;
+                        sumVertex   += vec4(elemByVertIndex(vertId, uvFromIndex(elemId) ).xyz, 1.0);
+                    } else { break; }
                 }
-                return result;
-           }
-           void main()	{
-               vec2 uv = gl_FragCoord.xy / resolution.xy;
+                sumVertex /= sumVertex.w;
 
-               vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
-               //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
-               //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
-               //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
+                //int   elemId = int(vertIndices1[0]) / 4;
+                //int   vertId = int(vertIndices1[0]) % 4;
+                //pc_fragColor = elemByVertIndex(vertId, uvFromIndex(elemId));
 
-               vec4 sumVertex = vec4(0.0);
-               for(int i = 0; i < 4; i++) {
-                   if(vertIndices1[i] > 0.0) {
-                       float elemId =     mod(vertIndices1[i],  2048.0);
-                       int vertId = int(floor(vertIndices1[i] / 2048.0));
-                       sumVertex   += vec4(elemByVertIndex(vertId, uvFromIndex(elemId) ).xyz, 1.0);
-                   } else { break; }
-               }
-               sumVertex /= sumVertex.w;
-
-               pc_fragColor = vec4(sumVertex.xyz, 0);//texture2D(texturePos, uv); //
-           }`//);
-       //this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
-       //this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
-       //this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
-       //this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
-       //this.applyElemPass.material.uniformsNeedUpdate = true;
-       //this.applyElemPass.material.needsUpdate = true;
+                pc_fragColor = vec4(sumVertex.xyz, 0);
+                //pc_fragColor = texture2D(texturePos, uv); //
+            }`);
+        this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
+        this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
+        this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
+        this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
+        this.applyElemPass.material.uniformsNeedUpdate = true;
+        this.applyElemPass.material.needsUpdate = true;
 
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
@@ -186,7 +211,7 @@ export class SoftBodyGPU {
         this.collisionPass.material.uniformsNeedUpdate = true;
         this.collisionPass.material.needsUpdate = true;
 
-        // 6. XPBD Velocity + Gravity Update
+        //// 6. XPBD Velocity + Gravity Update
         this.xpbdVelocityPass = this.gpuCompute.addPass(this.vel, [this.pos, this.prevPos], `
             out highp vec4 pc_fragColor;
             uniform float dt, gravity;
@@ -196,7 +221,7 @@ export class SoftBodyGPU {
                                        texture2D( texturePrevPos, uv ).xyz) / dt )
                                     + (vec3(0, gravity, 0) * dt ), 0.0 );
             }`);
-        this.xpbdVelocityPass.material.uniforms['dt'] = { value: this.physicsParams.dt };
+        this.xpbdVelocityPass.material.uniforms['dt'     ] = { value: this.physicsParams.dt };
         this.xpbdVelocityPass.material.uniforms['gravity'] = { value: this.physicsParams.gravity };
         this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
         this.xpbdVelocityPass.material.needsUpdate = true;
@@ -204,6 +229,16 @@ export class SoftBodyGPU {
         // Initialize the whole pipeline
         const error = this.gpuCompute.init();
         if ( error !== null ) { console.error( error ); }
+
+        // Show debug texture
+        if (!this.labelMesh) {
+            this.labelMaterial = new THREE.MeshBasicMaterial(
+                { map: this.gpuCompute.getCurrentRenderTarget(this.debugElem4).texture, side: THREE.DoubleSide });
+            this.labelPlane = new THREE.PlaneGeometry(1, 1);
+            this.labelMesh = new THREE.Mesh(this.labelPlane, this.labelMaterial);
+            this.labelMesh.position.set(0, 1, 0);
+            world.scene.add(this.labelMesh);
+        }
 
         // BELOW THIS POINT THE SCRIPT IS LARGELY UNCHANGED AS OF NOW
         // TODO: Finish the implementation! ---------------------------------------------------------------------------------------
@@ -242,6 +277,25 @@ export class SoftBodyGPU {
         this.visMesh.layers.enable(1);
         this.geometry.computeVertexNormals();
         this.updateVisMesh();
+
+        //// Run a substep!
+        //this.gpuCompute.compute();
+        //// Verify that the compute framebuffer is correct
+        //let numDifferences = [];
+        //// Read tetrahedron and debug positions back from the GPU
+        //this.readIntoBuffer(this.pos       , this. tetPositionsArray);
+        //this.readIntoBuffer(this.debugElem1, this.elemPositionsArray);
+        //for (let i = 0; i < this.numElems; i++){
+        //    let id0 = this.elemToParticlesTable.image.data[4 * i + 0] * 4;
+        //    let id1 = this.elemToParticlesTable.image.data[4 * i + 1] * 4;
+        //    let id2 = this.elemToParticlesTable.image.data[4 * i + 2] * 4;
+        //    let id3 = this.elemToParticlesTable.image.data[4 * i + 3] * 4; 
+        //    numDifferences.push(
+        //        this.elemPositionsArray[(i*4) + 0] - this.tetPositionsArray[id0 + 0],
+        //        this.elemPositionsArray[(i*4) + 1] - this.tetPositionsArray[id0 + 1],
+        //        this.elemPositionsArray[(i*4) + 2] - this.tetPositionsArray[id0 + 2]);
+        //}
+        //console.log(numDifferences);
     }
 
     initPhysics(density) {
@@ -250,9 +304,13 @@ export class SoftBodyGPU {
         // Initialize velocities and masses to 0
         //this.vel0                     // Leave as 0s for zero velocity
         //this.invMass                  // Inverse Volume Per Element
-        for (let i = 0; i < this.inputPos.length; i++){
+        for (let i = 0; i < this.numElems; i++){
             this.vel0.image.data[i] = 0.0;
             this.invMass.image.data[i] = 0.0;
+            this.particleToElemVertsTable[0].image.data[i] = -1.0;
+            this.particleToElemVertsTable[1].image.data[i] = -1.0;
+            this.particleToElemVertsTable[2].image.data[i] = -1.0;
+            this.particleToElemVertsTable[3].image.data[i] = -1.0;
         }
 
         // Initialize the positions of the vertices
@@ -273,15 +331,46 @@ export class SoftBodyGPU {
                                         // There is more than one because a particle may have a bunch of elems sharing it
         this.oldInvRestPose = new Float32Array(9 * this.numElems);
         for (let i = 0; i < this.numElems; i++) {
-            let id0 = this.tetIds[4 * i    ];
-            let id1 = this.tetIds[4 * i + 1];
-            let id2 = this.tetIds[4 * i + 2];
-            let id3 = this.tetIds[4 * i + 3];
+            let id0 = this.tetIds[(4 * i)    ];
+            let id1 = this.tetIds[(4 * i) + 1];
+            let id2 = this.tetIds[(4 * i) + 2];
+            let id3 = this.tetIds[(4 * i) + 3];
 
-            this.elemToParticlesTable.image.data[4 * i    ] = id0;
-            this.elemToParticlesTable.image.data[4 * i + 1] = id1;
-            this.elemToParticlesTable.image.data[4 * i + 2] = id2;
-            this.elemToParticlesTable.image.data[4 * i + 3] = id3;
+            // The forward table
+            this.elemToParticlesTable.image.data[(4 * i)    ] = id0;
+            this.elemToParticlesTable.image.data[(4 * i) + 1] = id1;
+            this.elemToParticlesTable.image.data[(4 * i) + 2] = id2;
+            this.elemToParticlesTable.image.data[(4 * i) + 3] = id3;
+
+            // Construct the particleToElemVertsTables
+            // Encode this particle's vert index within the elemTexture[4]
+            // int elemId = int(floor(value / 4.0));
+            // int vertId = int(  mod(value , 4.0));
+            //let ids = [id0, id1, id2, id3];
+            //for (let id = 0; id < 4; id++) {
+            //    let assigned = false;
+            //    for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
+            //        for (let c = 0; c < 4; c++) {
+            //            if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] < 0.0) {
+            //                this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0*i) + id;
+            //                assigned = true; break;
+            //            }
+            //        }
+            //        if (assigned) break;
+            //    }
+            //}
+            //if (this.particleToElemVertsTable[0].image.data[4 * id0] < 0.0) {
+                this.particleToElemVertsTable[0].image.data[4 * id0] = (4.0 * i) + 0;
+            //}
+            //if (this.particleToElemVertsTable[0].image.data[4 * id1] < 0.0) {
+                this.particleToElemVertsTable[0].image.data[4 * id1] = (4.0 * i) + 1;
+            //}
+            //if (this.particleToElemVertsTable[0].image.data[4 * id2] < 0.0) {
+                this.particleToElemVertsTable[0].image.data[4 * id2] = (4.0 * i) + 2;
+            //}
+            //if (this.particleToElemVertsTable[0].image.data[4 * id3] < 0.0) {
+                this.particleToElemVertsTable[0].image.data[4 * id3] = (4.0 * i) + 3;
+            //}
 
             this.vecSetDiff(this.oldInvRestPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
             this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
@@ -300,24 +389,6 @@ export class SoftBodyGPU {
             this.invRestPoseZ.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 6];
             this.invRestPoseZ.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 7];
             this.invRestPoseZ.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 8];
-
-            // Construct the particleToElemVertsTables
-            // Encode this particle's vert index within the elemTexture[4]
-            // int elemId = int(  mod(value,  2048.0)); (No more than 20148 verts please!)
-            // int vertId = int(floor(value / 2048.0));
-            let ids = [id0, id1, id2, id3];
-            for (let id = 0; id < 4; id++) {
-                let assigned = false;
-                for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
-                    for (let c = 0; c < 4; c++) {
-                        if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] < 0.0) {
-                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = i + (2048.0 * id);
-                            assigned = true; break;
-                        }
-                    }
-                    if (assigned) break;
-                }
-            }
 
             let pm = V / 4.0 * density;
             this.invMass      .image.data[id0 * 4] += pm;
@@ -453,11 +524,24 @@ export class SoftBodyGPU {
         this.updateVisMesh();
     }
 
+    readIntoBuffer(gpuComputeVariable, buffer) {
+        let target = this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable);
+        if (target.isWebGLMultipleRenderTargets) {
+            // BROKEN BAH
+            this.renderer.readRenderTargetPixels(
+                this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable).texture[0],
+                0, 0, this.texDim, this.texDim, buffer);
+        } else {
+            this.renderer.readRenderTargetPixels(
+                this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable),
+                0, 0, this.texDim, this.texDim, buffer);
+        }
+
+    }
+
     updateEdgeMesh() {
         // Read tetrahedron positions back from the GPU
-        this.renderer.readRenderTargetPixels(
-            this.gpuCompute.getCurrentRenderTarget(this.pos),
-            0, 0, this.texDim, this.texDim, this.tetPositionsArray);
+        this.readIntoBuffer(this.pos, this.tetPositionsArray);
 
         let positionIndex = 0;
         const positions = this.edgeMesh.geometry.attributes.position.array;
