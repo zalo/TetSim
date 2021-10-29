@@ -46,17 +46,19 @@ export class SoftBodyGPU {
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
         this.copyPrevPosPass = this.gpuCompute.addPass(this.prevPos, [this.pos], `
+            out highp vec4 pc_fragColor;
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
-                gl_FragColor = vec4( texture2D( texturePos, uv ).xyz, 0.0 );
+                pc_fragColor = vec4( texture2D( texturePos, uv ).xyz, 0.0 );
             }`);
 
         // 2. XPBD Prediction/Integration
         this.xpbdIntegratePass = this.gpuCompute.addPass(this.pos, [this.vel, this.pos], `
+            out highp vec4 pc_fragColor;
             uniform float dt;
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
-                gl_FragColor = vec4( texture2D( texturePos, uv ).xyz +
+                pc_fragColor = vec4( texture2D( texturePos, uv ).xyz +
                                    ( texture2D( textureVel, uv ).xyz * dt), 0.0 );
             }`);
         this.xpbdIntegratePass.material.uniforms['dt'] = { value: this.physicsParams.dt };
@@ -69,17 +71,12 @@ export class SoftBodyGPU {
         // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
         // 3. Gather+Enforce Element Constraints
-        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos],
-            `
+        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos], `
             uniform float dt;
-
             uniform sampler2D elemToParticlesTable, invRestVolume,
                     invRestPoseX, invRestPoseY, invRestPoseZ;
 
-            // TODO: MONKEY HACK IN THE CORE THREE.JS LIB
-            // CHANGE: ( parameters.glslVersion === GLSL3 ) ? '' : 'out highp vec4 pc_fragColor;',
-            // TO:     ( parameters.glslVersion === GLSL3 ) ? '' : 'layout(location = 0) out highp vec4 pc_fragColor;',
-            //layout(location = 0) out vec4 vert1;
+            layout(location = 0) out vec4 vert1;
             layout(location = 1) out vec4 vert2;
             layout(location = 2) out vec4 vert3;
             layout(location = 3) out vec4 vert4;
@@ -106,11 +103,19 @@ export class SoftBodyGPU {
 
                 // Perform the NeoHookean Tet Constraint Resolution Step
 
-                gl_FragColor = vec4(vert1Pos, 0);
+                vert1 = vec4(vert1Pos, 0);
                 vert2 = vec4(vert2Pos, 0);
                 vert3 = vec4(vert3Pos, 0);
                 vert4 = vec4(vert4Pos, 0);
             }`);
+        this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
+        this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
+        this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolume };
+        this.solveElemPass.material.uniforms['invRestPoseX'        ] = { value: this.invRestPoseX };
+        this.solveElemPass.material.uniforms['invRestPoseY'        ] = { value: this.invRestPoseY };
+        this.solveElemPass.material.uniforms['invRestPoseZ'        ] = { value: this.invRestPoseZ };
+        this.solveElemPass.material.uniformsNeedUpdate = true;
+        this.solveElemPass.material.needsUpdate = true;
 
         //// 4. Scatter Results from Elems back to Pos
         //this.gpuCompute.addPass(this.pos, [this.elems,
@@ -119,6 +124,7 @@ export class SoftBodyGPU {
 
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
+            out highp vec4 pc_fragColor;
             uniform float dt, friction;
             void main()	{
                 vec2 uv  = gl_FragCoord.xy / resolution.xy;
@@ -130,7 +136,7 @@ export class SoftBodyGPU {
                     vec3 F = texture2D( texturePrevPos, uv ).xyz - pos;
                     pos.xz += F.xz * min(1.0, dt * friction);
                 }
-                gl_FragColor = vec4(pos, 0.0 );
+                pc_fragColor = vec4(pos, 0.0 );
             }`);
         this.collisionPass.material.uniforms['dt'      ] = { value: this.physicsParams.dt };
         this.collisionPass.material.uniforms['friction'] = { value: this.physicsParams.friction };
@@ -139,10 +145,11 @@ export class SoftBodyGPU {
 
         // 6. XPBD Velocity + Gravity Update
         this.xpbdVelocityPass = this.gpuCompute.addPass(this.vel, [this.pos, this.prevPos], `
+            out highp vec4 pc_fragColor;
             uniform float dt, gravity;
             void main()	{
                 vec2 uv      = gl_FragCoord.xy / resolution.xy;
-                gl_FragColor = vec4((( texture2D( texturePos    , uv ).xyz -
+                pc_fragColor = vec4((( texture2D( texturePos    , uv ).xyz -
                                        texture2D( texturePrevPos, uv ).xyz) / dt )
                                     + (vec3(0, gravity, 0) * dt ), 0.0 );
             }`);

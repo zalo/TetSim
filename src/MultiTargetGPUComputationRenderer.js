@@ -8,9 +8,10 @@ import {
 	PlaneGeometry,
 	RGBAFormat,
 	Scene,
-	ShaderMaterial,
+	RawShaderMaterial,
 	WebGLRenderTarget,
-	WebGLMultipleRenderTargets
+    WebGLMultipleRenderTargets,
+    GLSL3
 } from 'three';
 
 /**
@@ -205,7 +206,7 @@ class MultiTargetGPUComputationRenderer {
             for (let i = 0; i < this.passes.length; i++) {
 
                 // Adds dependencies uniforms to the ShaderMaterial
-                const pass     = this.passes[i];
+                const pass = this.passes[i];
                 const variable = pass.variable;
                 const material = pass.material;
                 const uniforms = material.uniforms;
@@ -301,6 +302,9 @@ class MultiTargetGPUComputationRenderer {
         function addResolutionDefine(materialShader) {
 
             materialShader.defines.resolution = 'vec2( ' + sizeX.toFixed(1) + ', ' + sizeY.toFixed(1) + ' )';
+            //materialShader.defines.gl_FragColor = 'pc_fragColor';
+            materialShader.defines.texture2D = 'texture';
+            materialShader.defines.derp = '0.0;\nprecision highp float;';
 
         }
 
@@ -313,10 +317,11 @@ class MultiTargetGPUComputationRenderer {
 
             uniforms = uniforms || {};
 
-            const material = new ShaderMaterial({
+            const material = new RawShaderMaterial({
                 uniforms: uniforms,
                 vertexShader: getPassThroughVertexShader(),
-                fragmentShader: computeFragmentShader
+                fragmentShader: computeFragmentShader,
+                glslVersion: GLSL3
             });
 
             addResolutionDefine(material);
@@ -407,26 +412,30 @@ class MultiTargetGPUComputationRenderer {
         // Shaders
 
         function getPassThroughVertexShader() {
+            return `
+			in vec3 position;
 
-            return 'void main()	{\n' +
-                '\n' +
-                '	gl_Position = vec4( position, 1.0 );\n' +
-                '\n' +
-                '}\n';
+			uniform mat4 modelViewMatrix;
+			uniform mat4 projectionMatrix;
 
+			void main() {
+
+				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+
+				gl_Position = projectionMatrix * mvPosition;
+
+			}`
         }
 
         function getPassThroughFragmentShader() {
 
-            return 'uniform sampler2D passThruTexture;\n' +
-                '\n' +
-                'void main() {\n' +
-                '\n' +
-                '	vec2 uv = gl_FragCoord.xy / resolution.xy;\n' +
-                '\n' +
-                '	gl_FragColor = texture2D( passThruTexture, uv );\n' +
-                '\n' +
-                '}\n';
+            return `
+            out highp vec4 pc_fragColor;
+            uniform sampler2D passThruTexture;
+                void main() {
+                	vec2 uv = gl_FragCoord.xy / resolution.xy;
+                	pc_fragColor = texture2D( passThruTexture, uv );
+                }`;
 
         }
 
