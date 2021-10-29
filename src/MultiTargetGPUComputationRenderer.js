@@ -245,12 +245,14 @@ class MultiTargetGPUComputationRenderer {
                             uniforms[depVar.name] = { value: null };
                             material.fragmentShader = '\nuniform sampler2D ' + depVar.name + ';\n' + material.fragmentShader;
                         } else {
-                            let prefix = "";
-                            for (let t = 0; t < depVar.count; t++) {
-                                uniforms[depVar.name+t] = { value: null };
-                                prefix += '\nuniform sampler2D ' + (depVar.name + t) + ';\n';
-                            }
-                            material.fragmentShader = prefix + material.fragmentShader;
+                            uniforms[depVar.name] = { value: [] };
+                            material.fragmentShader = '\nuniform sampler2D ' + depVar.name + '[ ' + depVar.count + ' ];\n' + material.fragmentShader;
+                            //let prefix = "";
+                            //for (let t = 0; t < depVar.count; t++) {
+                            //    uniforms[depVar.name+t] = { value: null };
+                            //    prefix += '\nuniform sampler2D ' + (depVar.name + t) + ';\n';
+                            //}
+                            //material.fragmentShader = prefix + material.fragmentShader;
                         }
 
                     }

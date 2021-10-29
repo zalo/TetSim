@@ -70,7 +70,7 @@ export class SoftBodyGPU {
         // ElemToParticlesTable, particleToElemVertsTable, InvMassAndInvRestVolume, and InvRestPose[3]
         // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
-        // 3. Gather+Enforce Element Constraints
+        // 3. Gather into the Elements and Enforce Element Shape Constraint
         this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos], `
             uniform float dt;
             uniform sampler2D elemToParticlesTable, invRestVolume,
@@ -117,45 +117,53 @@ export class SoftBodyGPU {
         this.solveElemPass.material.uniformsNeedUpdate = true;
         this.solveElemPass.material.needsUpdate = true;
 
-        // 4. Scatter Results from Elems back to Pos
-        //this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems], `
-        //    out highp vec4 pc_fragColor;
-        //    uniform float dt;
-        //    uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
-        //                      particleToElemVertsTable3, particleToElemVertsTable4;
-        //    vec2 uvFromIndex(float index) {
-        //        return vec2(  mod(index,  resolution.x),
-        //                    floor(index / resolution.x)) / resolution.xy; }
-        //    void main()	{
-        //        vec2 uv = gl_FragCoord.xy / resolution.xy;
+       // 4. Gather the particles back from the elements
+        //this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
+        `
+           out highp vec4 pc_fragColor;
+           uniform float dt;
+           uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
+                             particleToElemVertsTable3, particleToElemVertsTable4;
+           vec2 uvFromIndex(float index) {
+               return vec2(  mod(index,  resolution.x),
+                           floor(index / resolution.x)) / resolution.xy; }
+           vec4 elemByVertIndex(int index, vec2 uv) {
+                vec4 result = texture2D( textureElem[0], uv );
+                if (index == 1) {
+                    result = texture2D( textureElem[1], uv );
+                } else if (index == 2) {
+                    result = texture2D( textureElem[2], uv );
+                } else if (index == 3) {
+                    result = texture2D( textureElem[3], uv );
+                }
+                return result;
+           }
+           void main()	{
+               vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-        //        vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
-        //        //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
-        //        //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
-        //        //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
+               vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
+               //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
+               //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
+               //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
 
-        //        vec4 sumVertex = vec4(0.0);
-        //        for(int i = 0; i < 4; i++) {
-        //            if(vertIndices1[i] > 0.0) {
-        //                float elemId = vertIndices1[i] % 2048.0;
-        //                float vertId = floor(vertIndices1[i] / 2048.0);
-        //                sumVertex += texture2D( textureElem[vertId], uvFromIndex(elemId) );
-        //            } else { break; }
-        //        }
+               vec4 sumVertex = vec4(0.0);
+               for(int i = 0; i < 4; i++) {
+                   if(vertIndices1[i] > 0.0) {
+                       float elemId =     mod(vertIndices1[i],  2048.0);
+                       int vertId = int(floor(vertIndices1[i] / 2048.0));
+                       sumVertex   += vec4(elemByVertIndex(vertId, uvFromIndex(elemId) ).xyz, 1.0);
+                   } else { break; }
+               }
+               sumVertex /= sumVertex.w;
 
-        //        vec3 elemVertex1 = texture2D( textureElem0, uvFromIndex(vertIndices1.x) ).xyz;
-        //        //vec3 elemVertex2 = texture2D( textureElem1, uv ).xyz;
-        //        //vec3 elemVertex3 = texture2D( textureElem2, uv ).xyz;
-        //        //vec3 elemVertex4 = texture2D( textureElem3, uv ).xyz;
-
-        //        pc_fragColor = vec4(elemVertex1, 0);
-        //    }`);
-        //this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
-        //this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
-        //this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
-        //this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
-        //this.applyElemPass.material.uniformsNeedUpdate = true;
-        //this.applyElemPass.material.needsUpdate = true;
+               pc_fragColor = vec4(sumVertex.xyz, 0);//texture2D(texturePos, uv); //
+           }`//);
+       //this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
+       //this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
+       //this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
+       //this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
+       //this.applyElemPass.material.uniformsNeedUpdate = true;
+       //this.applyElemPass.material.needsUpdate = true;
 
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
@@ -294,13 +302,16 @@ export class SoftBodyGPU {
             this.invRestPoseZ.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 8];
 
             // Construct the particleToElemVertsTables
+            // Encode this particle's vert index within the elemTexture[4]
+            // int elemId = int(  mod(value,  2048.0)); (No more than 20148 verts please!)
+            // int vertId = int(floor(value / 2048.0));
             let ids = [id0, id1, id2, id3];
             for (let id = 0; id < 4; id++) {
                 let assigned = false;
                 for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
                     for (let c = 0; c < 4; c++) {
                         if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] < 0.0) {
-                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = i; // TODO: Encode this particle's vert index within the elemTexture
+                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = i + (2048.0 * id);
                             assigned = true; break;
                         }
                     }
