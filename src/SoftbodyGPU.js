@@ -26,10 +26,10 @@ export class SoftBodyGPU {
         this.invRestPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.invRestPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.elemToParticlesTable  = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
-        this.particleToElemsTableA = this.gpuCompute.createTexture(); // Maps from vertices back to the elems gbuffer for the scatter step
-        this.particleToElemsTableB = this.gpuCompute.createTexture(); // There is more than one because a particle may have a bunch of elems sharing it
-        this.particleToElemsTableC = this.gpuCompute.createTexture();
-        this.particleToElemsTableD = this.gpuCompute.createTexture();
+        this.particleToElemVertsTable = [this.gpuCompute.createTexture(), // Maps from vertices back to the elems gbuffer for the scatter step
+                                     this.gpuCompute.createTexture(), // There is more than one because a particle may have a bunch of elems sharing it
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture()];
 
         // Fill in the above textures with the appropriate data
         this.tetIds = tetIds;
@@ -40,7 +40,7 @@ export class SoftBodyGPU {
         this.prevPos = this.gpuCompute.addVariable("texturePrevPos", this.pos0);
         this.vel     = this.gpuCompute.addVariable("textureVel"    , this.vel0);
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
-        // (before the gather step where they are accumulated back into pos via the particleToElemsTable)
+        // (before the gather step where they are accumulated back into pos via the particleToElemVertsTable)
         this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
 
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
@@ -67,7 +67,7 @@ export class SoftBodyGPU {
 
         // Steps 3 and 4 are going to be the toughest
         // Need to take special care when precomputing 
-        // ElemToParticlesTable, ParticleToElemsTable, InvMassAndInvRestVolume, and InvRestPose[3]
+        // ElemToParticlesTable, particleToElemVertsTable, InvMassAndInvRestVolume, and InvRestPose[3]
         // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
         // 3. Gather+Enforce Element Constraints
@@ -101,7 +101,7 @@ export class SoftBodyGPU {
                 vec3 vert3Pos   = texture2D( texturePos, uvFromIndex(tetIndices.z)).xyz;
                 vec3 vert4Pos   = texture2D( texturePos, uvFromIndex(tetIndices.w)).xyz;
 
-                // Perform the NeoHookean Tet Constraint Resolution Step
+                // TODO: Perform the NeoHookean Tet Constraint Resolution Step
 
                 vert1 = vec4(vert1Pos, 0);
                 vert2 = vec4(vert2Pos, 0);
@@ -117,10 +117,45 @@ export class SoftBodyGPU {
         this.solveElemPass.material.uniformsNeedUpdate = true;
         this.solveElemPass.material.needsUpdate = true;
 
-        //// 4. Scatter Results from Elems back to Pos
-        //this.gpuCompute.addPass(this.pos, [this.elems,
-        //    this.particleToElemsTableA, this.particleToElemsTableB, this.particleToElemsTableC,
-        //    this.particleToElemsTableD], scatterPosFragShader);
+        // 4. Scatter Results from Elems back to Pos
+        //this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems], `
+        //    out highp vec4 pc_fragColor;
+        //    uniform float dt;
+        //    uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
+        //                      particleToElemVertsTable3, particleToElemVertsTable4;
+        //    vec2 uvFromIndex(float index) {
+        //        return vec2(  mod(index,  resolution.x),
+        //                    floor(index / resolution.x)) / resolution.xy; }
+        //    void main()	{
+        //        vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+        //        vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
+        //        //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
+        //        //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
+        //        //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
+
+        //        vec4 sumVertex = vec4(0.0);
+        //        for(int i = 0; i < 4; i++) {
+        //            if(vertIndices1[i] > 0.0) {
+        //                float elemId = vertIndices1[i] % 2048.0;
+        //                float vertId = floor(vertIndices1[i] / 2048.0);
+        //                sumVertex += texture2D( textureElem[vertId], uvFromIndex(elemId) );
+        //            } else { break; }
+        //        }
+
+        //        vec3 elemVertex1 = texture2D( textureElem0, uvFromIndex(vertIndices1.x) ).xyz;
+        //        //vec3 elemVertex2 = texture2D( textureElem1, uv ).xyz;
+        //        //vec3 elemVertex3 = texture2D( textureElem2, uv ).xyz;
+        //        //vec3 elemVertex4 = texture2D( textureElem3, uv ).xyz;
+
+        //        pc_fragColor = vec4(elemVertex1, 0);
+        //    }`);
+        //this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
+        //this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
+        //this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
+        //this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
+        //this.applyElemPass.material.uniformsNeedUpdate = true;
+        //this.applyElemPass.material.needsUpdate = true;
 
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
@@ -226,10 +261,8 @@ export class SoftBodyGPU {
         //this.invRestPoseY             // Split the 3x3 restpose into 3 textures
         //this.invRestPoseZ             // Split the 3x3 restpose into 3 textures
         //this.elemToParticlesTable     // Maps from elems to the 4 tet vertex positions for the gather step
-        //this.particleToElemsTableA    // Maps from vertices back to the elems gbuffer for the scatter step
-        //this.particleToElemsTableB    // There is more than one because a particle may have a bunch of elems sharing it
-        //this.particleToElemsTableC
-        //this.particleToElemsTableD
+        //this.particleToElemVertsTable[]   // Maps from vertices back to the elems gbuffer for the scatter step
+                                        // There is more than one because a particle may have a bunch of elems sharing it
         this.oldInvRestPose = new Float32Array(9 * this.numElems);
         for (let i = 0; i < this.numElems; i++) {
             let id0 = this.tetIds[4 * i    ];
@@ -260,7 +293,20 @@ export class SoftBodyGPU {
             this.invRestPoseZ.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 7];
             this.invRestPoseZ.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 8];
 
-            // TODO: Construct the particleToElemsTables A through D
+            // Construct the particleToElemVertsTables
+            let ids = [id0, id1, id2, id3];
+            for (let id = 0; id < 4; id++) {
+                let assigned = false;
+                for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
+                    for (let c = 0; c < 4; c++) {
+                        if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] < 0.0) {
+                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = i; // TODO: Encode this particle's vert index within the elemTexture
+                            assigned = true; break;
+                        }
+                    }
+                    if (assigned) break;
+                }
+            }
 
             let pm = V / 4.0 * density;
             this.invMass      .image.data[id0 * 4] += pm;
