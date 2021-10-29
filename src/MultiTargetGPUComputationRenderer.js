@@ -63,7 +63,7 @@ import {
  * const error = gpuCompute.init();
  * if ( error !== null ) {
  *		console.error( error );
-  * }
+ * }
  *
  *
  * // In each frame...
@@ -207,7 +207,7 @@ class MultiTargetGPUComputationRenderer {
                 // Adds dependencies uniforms to the ShaderMaterial
                 const pass     = this.passes[i];
                 const variable = pass.variable;
-                const material = variable.material;
+                const material = pass.material;
                 const uniforms = material.uniforms;
 
                 if (pass.dependencies !== null) {

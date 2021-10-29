@@ -10,14 +10,13 @@ export default class Main {
     constructor() {
         // Configure Settings
         this.physicsParams = {
-            gravity: -9.81,
-            timeStep : 1.0 / 60.0,
-            numSubsteps : 5,
-            friction: 1000.0,
-            density: 1000.0,
-            devCompliance: 1.0/100000.0,
-            volCompliance: 0.0,
-            worldBounds : [-2.5,-1.0, -2.5, 2.5, 10.0, 2.5],
+            gravity       : -9.81,
+            timeStep      : 1.0 / 60.0,
+            numSubsteps   : 5,
+            dt            : 1.0 / (60.0 * 5.0),
+            friction      : 1000.0,
+            density       : 1000.0,
+            devCompliance : 1.0/100000.0,
         };
         this.gui = new GUI();
         this.gui.add(this.physicsParams, 'gravity', -100.0, 0.0, 1);
@@ -28,14 +27,15 @@ export default class Main {
         this.gui.add(this.physicsParams, 'devCompliance', 1.0 / 200000.0, 1.0 / 1000.0, 0.00001);
         //this.gui.add(this.physicsParams, 'volCompliance', 0.0, 0.001, 0.00001);
 
+        // Construct the render world
+        this.world = new World(this);
+
         // Construct the physics world
         this.physicsScene = { softBodies : [] };
         this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams, 
             dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({color: 0xf78a1d}));
         this.physicsScene.softBodies.push(this.dragon);
 
-        // Construct the render world
-        this.world = new World(this);
         this.grabber = new Grabber(
             this.world.scene, this.world.renderer, this.world.camera,
             this.world.container.parentElement, this.world.controls);

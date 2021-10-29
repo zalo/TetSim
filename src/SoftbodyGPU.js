@@ -5,29 +5,31 @@ export class SoftBodyGPU {
     constructor(vertices, tetIds, tetEdgeIds, physicsParams,
         visVerts, visTriIds, visMaterial, renderer) {
         this.physicsParams = physicsParams; // Set the Uniforms using these later
+        /** @type {THREE.WebGLRenderer} */ 
         this.renderer = renderer;
 
         this.numParticles      = vertices.length / 3;
         this.numElems          = tetIds.length / 4;
         this.texDim            = Math.ceil(Math.sqrt(this.numParticles));
-        this.tetPositionsArray = new Float32Array(this.texDim * this.texDim); // Used for GPU Readback
+        this.tetPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
+        this.inputPos          = vertices.slice(0);
 
         // Initialize the General Purpose GPU Computation Renderer
         this.gpuCompute = new MultiTargetGPUComputationRenderer(this.texDim, this.texDim, this.renderer)
 
         // Allocate static textures that are used to initialize the simulation
-        this.pos0                    = this.gpuCompute.createTexture(); // Set to vertices
-        this.vel0                    = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
-        this.invMass                 = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
-        this.invRestVolume           = this.gpuCompute.createTexture(); // Inverse Volume Per Element
-        this.invRestPoseX            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.invRestPoseY            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.invRestPoseZ            = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.elemToParticlesTable    = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
-        this.particleToElemsTableA   = this.gpuCompute.createTexture(); // Maps from vertices back to the elems gbuffer for the scatter step
-        this.particleToElemsTableB   = this.gpuCompute.createTexture(); // There is more than one because a particle may have a bunch of elems sharing it
-        this.particleToElemsTableC   = this.gpuCompute.createTexture();
-        this.particleToElemsTableD   = this.gpuCompute.createTexture();
+        this.pos0                  = this.gpuCompute.createTexture(); // Set to vertices
+        this.vel0                  = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
+        this.invMass               = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
+        this.invRestVolume         = this.gpuCompute.createTexture(); // Inverse Volume Per Element
+        this.invRestPoseX          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.invRestPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.invRestPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.elemToParticlesTable  = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
+        this.particleToElemsTableA = this.gpuCompute.createTexture(); // Maps from vertices back to the elems gbuffer for the scatter step
+        this.particleToElemsTableB = this.gpuCompute.createTexture(); // There is more than one because a particle may have a bunch of elems sharing it
+        this.particleToElemsTableC = this.gpuCompute.createTexture();
+        this.particleToElemsTableD = this.gpuCompute.createTexture();
 
         // Fill in the above textures with the appropriate data
         this.tetIds = tetIds;
@@ -39,7 +41,7 @@ export class SoftBodyGPU {
         this.vel     = this.gpuCompute.addVariable("textureVel"    , this.vel0);
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
         // (before the gather step where they are accumulated back into pos via the particleToElemsTable)
-        this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
+        //this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
 
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
@@ -57,7 +59,14 @@ export class SoftBodyGPU {
                 gl_FragColor = vec4( texture2D( texturePos, uv ).xyz +
                                    ( texture2D( textureVel, uv ).xyz * dt), 0.0 );
             }`);
-        this.xpbdIntegratePass.material.uniforms.dt = this.physicsParams.dt;
+        this.xpbdIntegratePass.material.uniforms['dt'] = { value: this.physicsParams.dt };
+        this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
+        this.xpbdIntegratePass.material.needsUpdate = true;
+
+        // Steps 3 and 4 are going to be the toughest
+        // Need to take special care when precomputing 
+        // ElemToParticlesTable, ParticleToElemsTable, InvMassAndInvRestVolume, and InvRestPose[3]
+        // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
         // 3. Gather+Enforce Element Constraints
         //this.gpuCompute.addPass(this.elems, [this.pos, this.elemToParticlesTable,
@@ -69,36 +78,49 @@ export class SoftBodyGPU {
         //    this.particleToElemsTableA, this.particleToElemsTableB, this.particleToElemsTableC,
         //    this.particleToElemsTableD], scatterPosFragShader);
 
-        // 5. Enforce Collisions and Apply Grab Forces
-        //this.gpuCompute.addPass(this.pos, [this.pos], grabAndCollideFragShader);
+        // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
+        this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
+            uniform float dt, friction;
+            void main()	{
+                vec2 uv  = gl_FragCoord.xy / resolution.xy;
+                vec3 pos = texture2D( texturePos    , uv ).xyz;
+                pos      = clamp(pos, vec3(-2.5, -1.0, -2.5), vec3(2.5, 10.0, 2.5));
+                // simple friction
+                if(pos.y < 0.0) {
+                    pos.y = 0.0;
+                    vec3 F = texture2D( texturePrevPos, uv ).xyz - pos;
+                    pos.xz += F.xz * min(1.0, dt * friction);
+                }
+                gl_FragColor = vec4(pos, 0.0 );
+            }`);
+        this.collisionPass.material.uniforms['dt'      ] = { value: this.physicsParams.dt };
+        this.collisionPass.material.uniforms['friction'] = { value: this.physicsParams.friction };
+        this.collisionPass.material.uniformsNeedUpdate = true;
+        this.collisionPass.material.needsUpdate = true;
 
         // 6. XPBD Velocity + Gravity Update
         this.xpbdVelocityPass = this.gpuCompute.addPass(this.vel, [this.pos, this.prevPos], `
             uniform float dt, gravity;
-            //uniform float gravity;
             void main()	{
-                vec2 uv = gl_FragCoord.xy / resolution.xy;
+                vec2 uv      = gl_FragCoord.xy / resolution.xy;
                 gl_FragColor = vec4((( texture2D( texturePos    , uv ).xyz -
-                                       texture2D( texturePrevPos, uv ).xyz) / dt)
-                                    + (vec3(0, gravity, 0) * dt), 0.0 );
+                                       texture2D( texturePrevPos, uv ).xyz) / dt )
+                                    + (vec3(0, gravity, 0) * dt ), 0.0 );
             }`);
-        this.xpbdVelocityPass.material.uniforms.dt = this.physicsParams.dt;
-        this.xpbdVelocityPass.material.uniforms.gravity = this.physicsParams.gravity;
+        this.xpbdVelocityPass.material.uniforms['dt'] = { value: this.physicsParams.dt };
+        this.xpbdVelocityPass.material.uniforms['gravity'] = { value: this.physicsParams.gravity };
+        this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
+        this.xpbdVelocityPass.material.needsUpdate = true;
 
-        // Steps 3 and 4 are going to be the toughest
-        // Need to take special care when precomputing 
-        // ElemToParticlesTable, ParticleToElemsTable, InvMassAndInvRestVolume, and InvRestPose[3]
-        // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
-
-        // Write simple passes
-
-        // Figure out how to read + Interpret the Pos Texture back from the GPU!
+        // Initialize the whole pipeline
+        const error = this.gpuCompute.init();
+        if ( error !== null ) { console.error( error ); }
 
         // BELOW THIS POINT THE SCRIPT IS LARGELY UNCHANGED AS OF NOW
         // TODO: Finish the implementation! ---------------------------------------------------------------------------------------
 
         this.grabPos = new Float32Array(3);
-        this.grabId = -1;
+        this.grabId  = -1;
 
         // solve data: define here to avoid memory allocation during solve
 
@@ -135,12 +157,11 @@ export class SoftBodyGPU {
 
     initPhysics(density) {
         // and fill in here the texture data from vertices
-        let inputPos = vertices.slice(0);
 
         // Initialize velocities and masses to 0
         //this.vel0                     // Leave as 0s for zero velocity
         //this.invMass                  // Inverse Volume Per Element
-        for (let i = 0; i < inputPos.length; i++){
+        for (let i = 0; i < this.inputPos.length; i++){
             this.vel0.image.data[i] = 0.0;
             this.invMass.image.data[i] = 0.0;
         }
@@ -148,10 +169,10 @@ export class SoftBodyGPU {
         // Initialize the positions of the vertices
         //this.pos0                     // Set to vertices
         let posIndex = 0;
-        for (let i = 0; i < inputPos.length; i += 4){
-            this.pos0.image.data[i  ] = vertices[posIndex++];
-            this.pos0.image.data[i+1] = vertices[posIndex++];
-            this.pos0.image.data[i+2] = vertices[posIndex++];
+        for (let i = 0; i < this.pos0.image.data.length; i += 4){
+            this.pos0.image.data[i  ] = this.inputPos[posIndex++];
+            this.pos0.image.data[i+1] = this.inputPos[posIndex++];
+            this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
 
         //this.invRestVolume            // Have Mass and Rest Volume Share a Texture
@@ -175,16 +196,9 @@ export class SoftBodyGPU {
             this.elemToParticlesTable.image.data[4 * i + 2] = id2;
             this.elemToParticlesTable.image.data[4 * i + 3] = id3;
 
-            let pm = V / 4.0 * density;
-            this.invMass      .image.data[id0 * 4] += pm;
-            this.invMass      .image.data[id1 * 4] += pm;
-            this.invMass      .image.data[id2 * 4] += pm;
-            this.invMass      .image.data[id3 * 4] += pm;
-            this.invRestVolume.image.data[i   * 4] = 1.0 / V;
-
-            this.vecSetDiff(this.oldInvRestPose, 3 * i    , inputPos, id1, inputPos, id0);
-            this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, inputPos, id2, inputPos, id0);
-            this.vecSetDiff(this.oldInvRestPose, 3 * i + 2, inputPos, id3, inputPos, id0);
+            this.vecSetDiff(this.oldInvRestPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
+            this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
+            this.vecSetDiff(this.oldInvRestPose, 3 * i + 2, this.inputPos, id3, this.inputPos, id0);
             let V = this.matGetDeterminant(this.oldInvRestPose, i) / 6.0;
             this.matSetInverse(this.oldInvRestPose, i);
 
@@ -192,7 +206,12 @@ export class SoftBodyGPU {
 
             // TODO: Construct the particleToElemsTables A through D
 
-
+            let pm = V / 4.0 * density;
+            this.invMass      .image.data[id0 * 4] += pm;
+            this.invMass      .image.data[id1 * 4] += pm;
+            this.invMass      .image.data[id2 * 4] += pm;
+            this.invMass      .image.data[id3 * 4] += pm;
+            this.invRestVolume.image.data[i   * 4] = 1.0 / V;
         }
 
         for (let i = 0; i < this.invMass.image.data.length; i++) {
@@ -308,59 +327,10 @@ export class SoftBodyGPU {
     }
 
     simulate(dt, physicsParams) {
-        // Update the Simulation Uniforms
-        this.xpbdIntegratePass.material.uniforms.dt        = dt;
-        this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
-        this.xpbdVelocityPass .material.uniforms.dt        = dt;
-        this.xpbdVelocityPass .material.uniforms.gravity   = this.physicsParams.gravity;
-        this.xpbdVelocityPass .material.uniformsNeedUpdate = true;
+        // TODO: Update the Simulation Uniforms
 
+        // Run a substep!
         this.gpuCompute.compute();
-
-        //// XPBD prediction
-        //for (let i = 0; i < this.numParticles; i++) {
-        //    // Gravity was added at the end of the last frame
-        //    this.vecCopy(this.prevPos, i, this.pos, i);
-        //    this.vecAdd(this.pos, i, this.vel, i, dt);
-        //}
-//
-        //// solve
-//
-        ////this.volError = 0.0;
-        //for (let i = 0; i < this.numElems; i++) { this.solveElem(i, dt); }
-        ////this.volError /= this.numElems;
-//
-        //// ground collision
-//
-        //for (let i = 0; i < this.numParticles; i++) {
-//
-        //    this.vecSetClamped(this.pos, i, physicsParams.worldBounds, 0,
-        //        physicsParams.worldBounds, 1);
-//
-        //    if (this.pos[3 * i + 1] < 0.0) {
-        //        this.pos[3 * i + 1] = 0.0;
-//
-        //        // simple friction
-        //        this.vecSetDiff(this.F, 0, this.prevPos, i, this.pos, i);
-//
-        //        this.pos[3 * i] += this.F[0] * Math.min(1.0, dt * physicsParams.friction);
-        //        this.pos[3 * i + 2] += this.F[2] * Math.min(1.0, dt * physicsParams.friction);
-//
-        //        // this.pos[3 * i] = this.prevPos[3 * i];
-        //        // this.pos[3 * i + 2] = this.prevPos[3 * i + 2];
-        //    }
-//
-        //}
-//
-        //if (this.grabId >= 0) {
-        //    this.vecCopy(this.pos, this.grabId, this.grabPos, 0);
-        //}
-//
-        //// XPBD velocity update
-        //for (let i = 0; i < this.vel.length; i++) {
-        //    this.vecSetDiff(this.vel, i, this.pos, i, this.prevPos, i, 1.0 / dt);
-        //    this.vecAdd(this.vel, i, [0.0, physicsParams.gravity, 0.0], 0, dt);
-        //}
     }
 
     // ----------------- end solver -----------------------------------------------------                
@@ -388,23 +358,23 @@ export class SoftBodyGPU {
     }
 
     updateVisMesh() {
-        const positions = this.visMesh.geometry.attributes.position.array;
-        let nr = 0;
-        for (let i = 0; i < this.numVisVerts; i++) {
-            let tetNr = this.visVerts[nr++] * 4;
-            let b0 = this.visVerts[nr++];
-            let b1 = this.visVerts[nr++];
-            let b2 = this.visVerts[nr++];
-            let b3 = 1.0 - b0 - b1 - b2;
-            this.vecSetZero(positions, i);
-            this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b0);
-            this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b1);
-            this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b2);
-            this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b3);
-        }
-        this.visMesh.geometry.computeVertexNormals();
-        this.visMesh.geometry.attributes.position.needsUpdate = true;
-        this.visMesh.geometry.computeBoundingSphere();
+        //const positions = this.visMesh.geometry.attributes.position.array;
+        //let nr = 0;
+        //for (let i = 0; i < this.numVisVerts; i++) {
+        //    let tetNr = this.visVerts[nr++] * 4;
+        //    let b0 = this.visVerts[nr++];
+        //    let b1 = this.visVerts[nr++];
+        //    let b2 = this.visVerts[nr++];
+        //    let b3 = 1.0 - b0 - b1 - b2;
+        //    this.vecSetZero(positions, i);
+        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b0);
+        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b1);
+        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b2);
+        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b3);
+        //}
+        //this.visMesh.geometry.computeVertexNormals();
+        //this.visMesh.geometry.attributes.position.needsUpdate = true;
+        //this.visMesh.geometry.computeBoundingSphere();
     }
 
     startGrab(pos) {
