@@ -41,7 +41,7 @@ export class SoftBodyGPU {
         this.vel     = this.gpuCompute.addVariable("textureVel"    , this.vel0);
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
         // (before the gather step where they are accumulated back into pos via the particleToElemsTable)
-        //this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
+        this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
 
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
@@ -69,9 +69,48 @@ export class SoftBodyGPU {
         // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
         // 3. Gather+Enforce Element Constraints
-        //this.gpuCompute.addPass(this.elems, [this.pos, this.elemToParticlesTable,
-        //    this.invMassAndInvRestVolume, this.invRestPoseX, this.invRestPoseY,
-        //    this.invRestPoseZ], gatherEnforceTetConstraintsFragShader);
+        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos],
+            `
+            uniform float dt;
+
+            uniform sampler2D elemToParticlesTable, invRestVolume,
+                    invRestPoseX, invRestPoseY, invRestPoseZ;
+
+            // TODO: MONKEY HACK IN THE CORE THREE.JS LIB
+            // CHANGE: ( parameters.glslVersion === GLSL3 ) ? '' : 'out highp vec4 pc_fragColor;',
+            // TO:     ( parameters.glslVersion === GLSL3 ) ? '' : 'layout(location = 0) out highp vec4 pc_fragColor;',
+            //layout(location = 0) out vec4 vert1;
+            layout(location = 1) out vec4 vert2;
+            layout(location = 2) out vec4 vert3;
+            layout(location = 3) out vec4 vert4;
+
+            vec2 uvFromIndex(float index) {
+                return vec2(  mod(index,  resolution.x),
+                            floor(index / resolution.x)) / resolution.xy; }
+
+            void main()	{
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
+                // Grab the Relevant Element Variables
+                float invVolume   = texture2D( invRestVolume, uv ).x;
+                mat3  invRestPose = mat3(
+                    texture2D( invRestPoseX, uv).xyz,
+                    texture2D( invRestPoseY, uv).xyz,
+                    texture2D( invRestPoseZ, uv).xyz);
+
+                // Gather this tetrahedron's 4 vertices
+                vec4 tetIndices = texture2D( elemToParticlesTable, uv );
+                vec3 vert1Pos   = texture2D( texturePos, uvFromIndex(tetIndices.x)).xyz;
+                vec3 vert2Pos   = texture2D( texturePos, uvFromIndex(tetIndices.y)).xyz;
+                vec3 vert3Pos   = texture2D( texturePos, uvFromIndex(tetIndices.z)).xyz;
+                vec3 vert4Pos   = texture2D( texturePos, uvFromIndex(tetIndices.w)).xyz;
+
+                // Perform the NeoHookean Tet Constraint Resolution Step
+
+                gl_FragColor = vec4(vert1Pos, 0);
+                vert2 = vec4(vert2Pos, 0);
+                vert3 = vec4(vert3Pos, 0);
+                vert4 = vec4(vert4Pos, 0);
+            }`);
 
         //// 4. Scatter Results from Elems back to Pos
         //this.gpuCompute.addPass(this.pos, [this.elems,
@@ -202,7 +241,17 @@ export class SoftBodyGPU {
             let V = this.matGetDeterminant(this.oldInvRestPose, i) / 6.0;
             this.matSetInverse(this.oldInvRestPose, i);
 
-            // TODO: Copy the oldInvRestPose into invRestPoseX, invRestPoseY, and invRestPoseZ
+            // Copy the oldInvRestPose into invRestPoseX, invRestPoseY, and invRestPoseZ
+            // TODO: Monitor whether this needs to be transposed
+            this.invRestPoseX.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 0];
+            this.invRestPoseX.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 1];
+            this.invRestPoseX.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 2];
+            this.invRestPoseY.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 3];
+            this.invRestPoseY.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 4];
+            this.invRestPoseY.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 5];
+            this.invRestPoseZ.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 6];
+            this.invRestPoseZ.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 7];
+            this.invRestPoseZ.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 8];
 
             // TODO: Construct the particleToElemsTables A through D
 
