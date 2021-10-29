@@ -304,9 +304,9 @@ export class SoftBodyGPU {
         // Initialize velocities and masses to 0
         //this.vel0                     // Leave as 0s for zero velocity
         //this.invMass                  // Inverse Volume Per Element
-        for (let i = 0; i < this.numElems; i++){
-            this.vel0.image.data[i] = 0.0;
-            this.invMass.image.data[i] = 0.0;
+        for (let i = 0; i < this.vel0.image.data.length; i++){
+            this.vel0                       .image.data[i] = 0.0;
+            this.invMass                    .image.data[i] = 0.0;
             this.particleToElemVertsTable[0].image.data[i] = -1.0;
             this.particleToElemVertsTable[1].image.data[i] = -1.0;
             this.particleToElemVertsTable[2].image.data[i] = -1.0;
@@ -346,31 +346,28 @@ export class SoftBodyGPU {
             // Encode this particle's vert index within the elemTexture[4]
             // int elemId = int(floor(value / 4.0));
             // int vertId = int(  mod(value , 4.0));
-            //let ids = [id0, id1, id2, id3];
-            //for (let id = 0; id < 4; id++) {
-            //    let assigned = false;
-            //    for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
-            //        for (let c = 0; c < 4; c++) {
-            //            if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] < 0.0) {
-            //                this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0*i) + id;
-            //                assigned = true; break;
-            //            }
-            //        }
-            //        if (assigned) break;
-            //    }
-            //}
-            //if (this.particleToElemVertsTable[0].image.data[4 * id0] < 0.0) {
-                this.particleToElemVertsTable[0].image.data[4 * id0] = (4.0 * i) + 0;
-            //}
-            //if (this.particleToElemVertsTable[0].image.data[4 * id1] < 0.0) {
-                this.particleToElemVertsTable[0].image.data[4 * id1] = (4.0 * i) + 1;
-            //}
-            //if (this.particleToElemVertsTable[0].image.data[4 * id2] < 0.0) {
-                this.particleToElemVertsTable[0].image.data[4 * id2] = (4.0 * i) + 2;
-            //}
-            //if (this.particleToElemVertsTable[0].image.data[4 * id3] < 0.0) {
-                this.particleToElemVertsTable[0].image.data[4 * id3] = (4.0 * i) + 3;
-            //}
+            let ids = [id0, id1, id2, id3];
+            for (let id = 0; id < 4; id++) {
+                let assigned = false;
+                for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
+                    for (let c = 0; c < 4; c++) {
+                        if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] <= 0.0) {
+                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0*i) + id;
+                            assigned = true; break;
+                        }
+                    }
+                    if (assigned) break;
+                }
+            }
+            //let check = false;
+            //if (this.particleToElemVertsTable[0].image.data[4 * id0] < 0.0 || check)
+            //    this.particleToElemVertsTable[0].image.data[4 * id0] = (4.0 * i) + 0;
+            //if (this.particleToElemVertsTable[0].image.data[4 * id1] < 0.0 || check)
+            //    this.particleToElemVertsTable[0].image.data[4 * id1] = (4.0 * i) + 1;
+            //if (this.particleToElemVertsTable[0].image.data[4 * id2] < 0.0 || check)
+            //    this.particleToElemVertsTable[0].image.data[4 * id2] = (4.0 * i) + 2;
+            //if (this.particleToElemVertsTable[0].image.data[4 * id3] < 0.0 || check)
+            //    this.particleToElemVertsTable[0].image.data[4 * id3] = (4.0 * i) + 3;
 
             this.vecSetDiff(this.oldInvRestPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
             this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
