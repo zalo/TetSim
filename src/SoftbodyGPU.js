@@ -142,51 +142,50 @@ export class SoftBodyGPU {
         `
             out highp vec4 pc_fragColor;
             uniform float dt;
-            uniform sampler2D particleToElemVertsTable1, particleToElemVertsTable2,
-                              particleToElemVertsTable3, particleToElemVertsTable4;
+            uniform sampler2D particleToElemVertsTable[4];
+
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
-            vec4 elemByVertIndex(int index, vec2 uv) {
+            vec4 textureElemSample(int index, vec2 uv) {
                  vec4 result = texture2D( textureElem[0], uv );
                  if (index == 1) {
-                     result = texture2D( textureElem[1], uv );
+                     result  = texture2D( textureElem[1], uv );
                  } else if (index == 2) {
-                     result = texture2D( textureElem[2], uv );
+                     result  = texture2D( textureElem[2], uv );
                  } else if (index == 3) {
-                     result = texture2D( textureElem[3], uv );
+                     result  = texture2D( textureElem[3], uv );
                  }
                  return result;
             }
+            vec4 particleToElemVertsTableSample(int index, vec2 uv) {
+                vec4 result = texture2D( particleToElemVertsTable[0], uv );
+                if (index == 1) {
+                    result  = texture2D( particleToElemVertsTable[1], uv );
+                } else if (index == 2) {
+                    result  = texture2D( particleToElemVertsTable[2], uv );
+                } else if (index == 3) {
+                    result  = texture2D( particleToElemVertsTable[3], uv );
+                }
+                return result;
+           }
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-                vec4 vertIndices1 = texture2D( particleToElemVertsTable1, uv );
-                //vec4 vertIndices2 = texture2D( particleToElemVertsTable2, uv );
-                //vec4 vertIndices3 = texture2D( particleToElemVertsTable3, uv );
-                //vec4 vertIndices4 = texture2D( particleToElemVertsTable4, uv );
-
                 vec4 sumVertex = vec4(0.0);
-                for(int i = 0; i < 4; i++) {
-                    if(vertIndices1[i] > 0.0) {
-                        int   elemId = int(vertIndices1[i]) / 4;
-                        int   vertId = int(vertIndices1[i]) % 4;
-                        sumVertex   += vec4(elemByVertIndex(vertId, uvFromIndex(elemId) ).xyz, 1.0);
-                    } else { break; }
+                for(int tableId = 0; tableId < 4; tableId++) {
+                    vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
+                    for(int component = 0; component < 4; component++) {
+                        if(vertIndices[component] > 0.0) {
+                            int   elemId = int(vertIndices[component]) / 4;
+                            int   vertId = int(vertIndices[component]) % 4;
+                            sumVertex   += vec4(textureElemSample(vertId, uvFromIndex(elemId) ).xyz, 1.0);
+                        } else { break; }
+                    }
                 }
-                sumVertex /= sumVertex.w;
-
-                //int   elemId = int(vertIndices1[0]) / 4;
-                //int   vertId = int(vertIndices1[0]) % 4;
-                //pc_fragColor = elemByVertIndex(vertId, uvFromIndex(elemId));
-
-                pc_fragColor = vec4(sumVertex.xyz, 0);
-                //pc_fragColor = texture2D(texturePos, uv); //
+                pc_fragColor = vec4((sumVertex / sumVertex.w).xyz, 0); // Output the average vertex position
             }`);
-        this.applyElemPass.material.uniforms['particleToElemVertsTable1'] = { value: this.particleToElemVertsTable[0] };
-        this.applyElemPass.material.uniforms['particleToElemVertsTable2'] = { value: this.particleToElemVertsTable[1] };
-        this.applyElemPass.material.uniforms['particleToElemVertsTable3'] = { value: this.particleToElemVertsTable[2] };
-        this.applyElemPass.material.uniforms['particleToElemVertsTable4'] = { value: this.particleToElemVertsTable[3] };
+        this.applyElemPass.material.uniforms['particleToElemVertsTable'] = { value: this.particleToElemVertsTable };
         this.applyElemPass.material.uniformsNeedUpdate = true;
         this.applyElemPass.material.needsUpdate = true;
 
@@ -330,6 +329,7 @@ export class SoftBodyGPU {
         //this.particleToElemVertsTable[]   // Maps from vertices back to the elems gbuffer for the scatter step
                                         // There is more than one because a particle may have a bunch of elems sharing it
         this.oldInvRestPose = new Float32Array(9 * this.numElems);
+        let biggestT = 0;
         for (let i = 0; i < this.numElems; i++) {
             let id0 = this.tetIds[(4 * i)    ];
             let id1 = this.tetIds[(4 * i) + 1];
@@ -352,7 +352,7 @@ export class SoftBodyGPU {
                 for (let t = 0; t < this.particleToElemVertsTable.length; t++) {
                     for (let c = 0; c < 4; c++) {
                         if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] <= 0.0) {
-                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0*i) + id;
+                            this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0 * i) + id;
                             assigned = true; break;
                         }
                     }
