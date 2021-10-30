@@ -220,13 +220,14 @@ export class SoftBodyGPU {
                 solveElement(invRestPose, invVolume, id, invMass);
 
                 // Ultra Simplified experiment: Use the rest pose directly without any rotation
+                // Looks funny because each tet has the same mass despite being different sizes
                 //mat3 restPose = inverse(invRestPose);
-                //id[0] = ((id[1] - restPose[0]) +
-                //         (id[2] - restPose[1]) +
-                //         (id[3] - restPose[2])) * 0.3333;
-                //id[1] = ((id[0] + restPose[0]));
-                //id[2] = ((id[0] + restPose[1]));
-                //id[3] = ((id[0] + restPose[2]));
+                //vec3 curCentroid  = (id[0] + id[1] + id[2] + id[3]) * 0.25;
+                //vec3 restCentroid = (restPose[0] + restPose[1] + restPose[2]) * 0.25;
+                //id[0] = -restCentroid + curCentroid;
+                //id[1] = (restPose[0] - restCentroid) + curCentroid;
+                //id[2] = (restPose[1] - restCentroid) + curCentroid;
+                //id[3] = (restPose[2] - restCentroid) + curCentroid;
 
                 // Write out the new positions
                 vert1 = vec4(id[0], 0);
