@@ -23,7 +23,7 @@ export class SoftBodyGPU {
         this.pos0                  = this.gpuCompute.createTexture(); // Set to vertices
         this.vel0                  = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
         this.invMass               = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
-        this.invRestVolume         = this.gpuCompute.createTexture(); // Inverse Volume Per Element
+        this.invRestVolumeAndColor = this.gpuCompute.createTexture(); // Inverse Volume and Graph Color Per Element
         this.invRestPoseX          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.invRestPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.invRestPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
@@ -237,7 +237,7 @@ export class SoftBodyGPU {
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
-        this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolume };
+        this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolumeAndColor };
         this.solveElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
         this.solveElemPass.material.uniforms['invRestPoseX'        ] = { value: this.invRestPoseX };
         this.solveElemPass.material.uniforms['invRestPoseY'        ] = { value: this.invRestPoseY };
@@ -371,7 +371,6 @@ export class SoftBodyGPU {
             world.scene.add(this.labelMesh);
         }
 
-        // BELOW THIS POINT THE SCRIPT IS LARGELY UNCHANGED AS OF NOW
         // TODO: Finish the implementation! ---------------------------------------------------------------------------------------
 
         this.grabPos = new Float32Array(3);
@@ -403,33 +402,12 @@ export class SoftBodyGPU {
         this.visMesh.layers.enable(1);
         this.geometry.computeVertexNormals();
         this.updateVisMesh();
-
-        //// Run a substep!
-        //this.gpuCompute.compute();
-        //// Verify that the compute framebuffer is correct
-        //let numDifferences = [];
-        //// Read tetrahedron and debug positions back from the GPU
-        //this.readIntoBuffer(this.pos       , this. tetPositionsArray);
-        //this.readIntoBuffer(this.debugElem1, this.elemPositionsArray);
-        //for (let i = 0; i < this.numElems; i++){
-        //    let id0 = this.elemToParticlesTable.image.data[4 * i + 0] * 4;
-        //    let id1 = this.elemToParticlesTable.image.data[4 * i + 1] * 4;
-        //    let id2 = this.elemToParticlesTable.image.data[4 * i + 2] * 4;
-        //    let id3 = this.elemToParticlesTable.image.data[4 * i + 3] * 4; 
-        //    numDifferences.push(
-        //        this.elemPositionsArray[(i*4) + 0] - this.tetPositionsArray[id0 + 0],
-        //        this.elemPositionsArray[(i*4) + 1] - this.tetPositionsArray[id0 + 1],
-        //        this.elemPositionsArray[(i*4) + 2] - this.tetPositionsArray[id0 + 2]);
-        //}
-        //console.log(numDifferences);
     }
 
     initPhysics(density) {
         // and fill in here the texture data from vertices
 
         // Initialize velocities and masses to 0
-        //this.vel0                     // Leave as 0s for zero velocity
-        //this.invMass                  // Inverse Volume Per Element
         for (let i = 0; i < this.vel0.image.data.length; i++){
             this.vel0                       .image.data[i] = 0.0;
             this.invMass                    .image.data[i] = 0.0;
@@ -453,13 +431,6 @@ export class SoftBodyGPU {
             this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
 
-        //this.invRestVolume            // Have Mass and Rest Volume Share a Texture
-        //this.invRestPoseX             // Split the 3x3 restpose into 3 textures
-        //this.invRestPoseY             // Split the 3x3 restpose into 3 textures
-        //this.invRestPoseZ             // Split the 3x3 restpose into 3 textures
-        //this.elemToParticlesTable     // Maps from elems to the 4 tet vertex positions for the gather step
-        //this.particleToElemVertsTable[]   // Maps from vertices back to the elems gbuffer for the scatter step
-                                        // There is more than one because a particle may have a bunch of elems sharing it
         this.oldInvRestPose = new Float32Array(9 * this.numElems);
         let biggestT = 0;
         for (let i = 0; i < this.numElems; i++) {
@@ -493,15 +464,6 @@ export class SoftBodyGPU {
                     if (assigned) break;
                 }
             }
-            //let check = false;
-            //if (this.particleToElemVertsTable[0].image.data[4 * id0] < 0.0 || check)
-            //    this.particleToElemVertsTable[0].image.data[4 * id0] = (4.0 * i) + 0;
-            //if (this.particleToElemVertsTable[0].image.data[4 * id1] < 0.0 || check)
-            //    this.particleToElemVertsTable[0].image.data[4 * id1] = (4.0 * i) + 1;
-            //if (this.particleToElemVertsTable[0].image.data[4 * id2] < 0.0 || check)
-            //    this.particleToElemVertsTable[0].image.data[4 * id2] = (4.0 * i) + 2;
-            //if (this.particleToElemVertsTable[0].image.data[4 * id3] < 0.0 || check)
-            //    this.particleToElemVertsTable[0].image.data[4 * id3] = (4.0 * i) + 3;
 
             this.vecSetDiff(this.oldInvRestPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
             this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
@@ -526,130 +488,51 @@ export class SoftBodyGPU {
             this.invMass      .image.data[id1 * 4] += pm;
             this.invMass      .image.data[id2 * 4] += pm;
             this.invMass      .image.data[id3 * 4] += pm;
-            this.invRestVolume.image.data[i   * 4] = 1.0 / V;
+            this.invRestVolumeAndColor.image.data[(i * 4) + 0] =  1.0 / V; // Set InvMass
+            this.invRestVolumeAndColor.image.data[(i * 4) + 1] = -1.0;     // Mark Color as Undefined
         }
 
         for (let i = 0; i < this.invMass.image.data.length; i++) {
             if (this.invMass.image.data[i] != 0.0) { this.invMass.image.data[i] = 1.0 / this.invMass.image.data[i]; }
         }
 
+        // Colors graph with mutually disconnected tetrahedra. 
+        // This keeps the tetrahedra from stepping on eachother while the constraints are being satisfied.
+        //this.colorGraph();
+
         console.log(biggestT);
         console.log(this.particleToElemVertsTable[8].image.data);
     }
 
+    // Yikes! 31 Passes!  This is unacceptably high connectivity; I refuse to simulate it this way...
+    //colorGraph() {
+    //    for (let currentGraphColor = 0; currentGraphColor < 100; currentGraphColor++) {
+    //        let vertexAccounting = {}; let numTetsAddedThisPass = 0;
+    //        //for (let i = 0; i < this.numElems; i++) {
+    //        for (let i = this.numElems-1; i >= 0; i--) {
+    //            let id0 = this.tetIds[(4 * i)];
+    //            let id1 = this.tetIds[(4 * i) + 1];
+    //            let id2 = this.tetIds[(4 * i) + 2];
+    //            let id3 = this.tetIds[(4 * i) + 3];
+    //            if (!(id0 in vertexAccounting) &&
+    //                !(id1 in vertexAccounting) &&
+    //                !(id2 in vertexAccounting) &&
+    //                !(id3 in vertexAccounting) &&
+    //                this.invRestVolumeAndColor.image.data[(i * 4) + 1] < 0.0) {
+    //                vertexAccounting[id0] = true;
+    //                vertexAccounting[id1] = true;
+    //                vertexAccounting[id2] = true;
+    //                vertexAccounting[id3] = true;
+    //                this.invRestVolumeAndColor.image.data[(i * 4) + 1] = currentGraphColor;
+    //                numTetsAddedThisPass += 1;
+    //            }
+    //        }
+    //        console.log(currentGraphColor, numTetsAddedThisPass);
+    //        if (numTetsAddedThisPass == 0) { break; }
+    //    }
+    //}
+
     // ----------------- begin solver -----------------------------------------------------                
-
-    solveElemSimple(elemNr, dt) {
-        let C = 0.0;
-        // tr(F) = 3
-        //this.P     = new Float32Array(9);
-        //this.F     = new Float32Array(9);
-        //this.dF    = new Float32Array(9);
-        //this.grads = new Float32Array(12); // vec3[4]
-        let g = this.grads;
-        let ir = this.invRestPose;
-
-        let id0 = this.pos[this.tetIds[4 * elemNr]];
-        let id1 = this.pos[this.tetIds[4 * elemNr + 1]];
-        let id2 = this.pos[this.tetIds[4 * elemNr + 2]];
-        let id3 = this.pos[this.tetIds[4 * elemNr + 3]];
-
-        // Watch out for transpose issues here
-        this.P = mat3(
-            id1 - id0,
-            id2 - id0,
-            id3 - id0);
-
-        this.F = this.P * ir;
-
-        let r_s = Math.sqrt(
-            dot(this.F[0], this.F[0]) +
-            dot(this.F[1], this.F[1]) +
-            dot(this.F[2], this.F[2]));
-        let r_s_inv = 1.0 / r_s;
-
-        g[1] = vec3(0);
-        g[1] += this.F[0] * r_s_inv * ir[0][0]
-        g[1] += this.F[1] * r_s_inv * ir[0][1]
-        g[1] += this.F[2] * r_s_inv * ir[0][2]
-
-        g[2] = vec3(0);
-        g[2] += this.F[0] * r_s_inv * ir[1][0]
-        g[2] += this.F[1] * r_s_inv * ir[1][1]
-        g[2] += this.F[2] * r_s_inv * ir[1][2]
-
-        g[3] = vec3(0);
-        g[3] += this.F[0] * r_s_inv * ir[2][0]
-        g[3] += this.F[1] * r_s_inv * ir[2][1]
-        g[3] += this.F[2] * r_s_inv * ir[2][2]
-
-        C = r_s;
-
-        // APPLY TO ELEM IN MIDDLE OF IT!
-        this.applyToElem(elemNr, C, this.physicsParams.devCompliance, dt);
-
-        // det F = 1
-
-        this.P = mat3(
-            tet1 - tet0,
-            tet2 - tet0,
-            tet3 - tet0);
-
-        this.F = this.P * ir;
-
-        this.dF = mat3(
-            cross(this.F[1], this.F[2]) +
-            cross(this.F[2], this.F[0]) +
-            cross(this.F[0], this.F[1]))
-
-        g[1] = vec3(0);
-        g[1] += this.dF[0] * ir[0][0]
-        g[1] += this.dF[1] * ir[0][1]
-        g[1] += this.dF[2] * ir[0][2]
-
-        g[2] = vec3(0);
-        g[2] += this.dF[0] * ir[1][0]
-        g[2] += this.dF[1] * ir[1][1]
-        g[2] += this.dF[2] * ir[1][2]
-
-        g[3] = vec3(0);
-        g[3] += this.dF[0] * ir[2][0]
-        g[3] += this.dF[1] * ir[2][1]
-        g[3] += this.dF[2] * ir[2][2]
-
-        let vol = det(this.F);
-        //C = vol - 1.0 - ((1.0 / this.physicsParams.devCompliance) / (1.0 / this.physicsParams.volCompliance));
-        C = vol - 1.0 - this.physicsParams.volCompliance / this.physicsParams.devCompliance;
-
-        //this.volError += vol - 1.0;
-        
-        this.applyToElem(elemNr, C, this.physicsParams.volCompliance, dt);
-    }
-
-    applyToElem(elemNr, C, compliance, dt) {
-        if (C == 0.0)
-            return;
-        let g = this.grads;
-
-        g[0] = vec3(0);
-        g[0] -= this.g[1]
-        g[0] -= this.g[2]
-        g[0] -= this.g[3]
-
-        let w = 0.0;
-        for (let i = 0; i < 4; i++) {
-            w += dot(g[i], g[i]) * vertex[i].invMass;
-        }
-
-        if (w == 0.0)
-            return;
-        let alpha = compliance / dt / dt * this.invRestVolume;
-        let dlambda = -C / (w + alpha);
-
-        for (let i = 0; i < 4; i++) {
-            vertex[i] += g[i] * dlambda * vertex[i].invMass;
-        }
-    }
 
     simulate(dt, physicsParams) {
         // Run a substep!
@@ -714,26 +597,26 @@ export class SoftBodyGPU {
         this.visMesh.geometry.computeBoundingSphere();
     }
 
-    startGrab(pos) {
-        let p = [pos.x, pos.y, pos.z];
-        let minD2 = Number.MAX_VALUE;
-        this.grabId = -1;
-        for (let i = 0; i < this.numParticles; i++) {
-            let d2 = this.vecDistSquared(p, 0, this.pos, i);
-            if (d2 < minD2) {
-                minD2 = d2;
-                this.grabId = i;
-            }
-        }
-        this.vecCopy(this.grabPos, 0, p, 0);
-    }
+    //startGrab(pos) {
+    //    let p = [pos.x, pos.y, pos.z];
+    //    let minD2 = Number.MAX_VALUE;
+    //    this.grabId = -1;
+    //    for (let i = 0; i < this.numParticles; i++) {
+    //        let d2 = this.vecDistSquared(p, 0, this.pos, i);
+    //        if (d2 < minD2) {
+    //            minD2 = d2;
+    //            this.grabId = i;
+    //        }
+    //    }
+    //    this.vecCopy(this.grabPos, 0, p, 0);
+    //}
 
-    moveGrabbed(pos) {
-        let p = [pos.x, pos.y, pos.z];
-        this.vecCopy(this.grabPos, 0, p, 0);
-    }
+    //moveGrabbed(pos) {
+    //    let p = [pos.x, pos.y, pos.z];
+    //    this.vecCopy(this.grabPos, 0, p, 0);
+    //}
 
-    endGrab() { this.grabId = -1; }
+    //endGrab() { this.grabId = -1; }
 
     // ----- vector math -------------------------------------------------------------
 
@@ -849,80 +732,80 @@ export class SoftBodyGPU {
 
 }
 
-export class Grabber {
-    constructor(scene, renderer, camera, container, controls) {
-        this.scene = scene;
-        this.renderer = renderer;
-        this.camera = camera;
-        this.mousePos = new THREE.Vector2();
-        this.raycaster = new THREE.Raycaster();
-        this.raycaster.layers.set(1);
-        //					this.raycaster.params.Mesh.threshold = 3;
-        this.raycaster.params.Line.threshold = 0.1;
-        this.grabDistance = 0.0;
-        this.active = false;
-        this.physicsObject = null;
-        this.controls = controls;
-
-        container.addEventListener( 'pointerdown', this.onPointer.bind(this), false );
-        container.addEventListener( 'pointermove', this.onPointer.bind(this), false );
-        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), false );
-        container.addEventListener( 'pointerout' , this.onPointer.bind(this), false );
-    }
-    updateRaycaster(x, y) {
-        var rect = this.renderer.domElement.getBoundingClientRect();
-        this.mousePos.x = ((x - rect.left) / rect.width) * 2 - 1;
-        this.mousePos.y = -((y - rect.top) / rect.height) * 2 + 1;
-        this.raycaster.setFromCamera(this.mousePos, this.camera);
-    }
-    start(x, y) {
-        this.physicsObject = null;
-        this.updateRaycaster(x, y);
-        var intersects = this.raycaster.intersectObjects(this.scene.children);
-        if (intersects.length > 0) {
-            var obj = intersects[0].object.userData;
-            if (obj instanceof SoftBody) {
-                this.physicsObject = obj;
-                this.grabDistance = intersects[0].distance;
-                let hit = this.raycaster.ray.origin.clone();
-                hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
-                this.physicsObject.startGrab(hit);
-                this.active = true;
-                this.controls.enabled = false;
-            }
-        }
-    }
-    move(x, y) {
-        if (this.active) {
-            this.updateRaycaster(x, y);
-            let hit = this.raycaster.ray.origin.clone();
-            hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
-            if (this.physicsObject != null)
-                this.physicsObject.moveGrabbed(hit);
-        }
-    }
-    end() {
-        if (this.active) {
-            if (this.physicsObject != null) {
-                this.physicsObject.endGrab();
-                this.physicsObject = null;
-            }
-            this.active = false;
-            this.controls.enabled = true;
-        }
-    }
-
-    onPointer(evt) {
-        evt.preventDefault();
-        if (evt.type == "pointerdown") {
-            this.start(evt.clientX, evt.clientY);
-            this.mouseDown = true;
-        } else if (evt.type == "pointermove" && this.mouseDown) {
-            if (this.active)
-                this.move(evt.clientX, evt.clientY);
-        } else if (evt.type == "pointerup" || evt.type == "pointerout") {
-            this.end();
-            this.mouseDown = false;
-        }
-    }
-}
+//export class Grabber {
+//    constructor(scene, renderer, camera, container, controls) {
+//        this.scene = scene;
+//        this.renderer = renderer;
+//        this.camera = camera;
+//        this.mousePos = new THREE.Vector2();
+//        this.raycaster = new THREE.Raycaster();
+//        this.raycaster.layers.set(1);
+//        //					this.raycaster.params.Mesh.threshold = 3;
+//        this.raycaster.params.Line.threshold = 0.1;
+//        this.grabDistance = 0.0;
+//        this.active = false;
+//        this.physicsObject = null;
+//        this.controls = controls;
+//
+//        container.addEventListener( 'pointerdown', this.onPointer.bind(this), false );
+//        container.addEventListener( 'pointermove', this.onPointer.bind(this), false );
+//        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), false );
+//        container.addEventListener( 'pointerout' , this.onPointer.bind(this), false );
+//    }
+//    updateRaycaster(x, y) {
+//        var rect = this.renderer.domElement.getBoundingClientRect();
+//        this.mousePos.x = ((x - rect.left) / rect.width) * 2 - 1;
+//        this.mousePos.y = -((y - rect.top) / rect.height) * 2 + 1;
+//        this.raycaster.setFromCamera(this.mousePos, this.camera);
+//    }
+//    start(x, y) {
+//        this.physicsObject = null;
+//        this.updateRaycaster(x, y);
+//        var intersects = this.raycaster.intersectObjects(this.scene.children);
+//        if (intersects.length > 0) {
+//            var obj = intersects[0].object.userData;
+//            if (obj instanceof SoftBody) {
+//                this.physicsObject = obj;
+//                this.grabDistance = intersects[0].distance;
+//                let hit = this.raycaster.ray.origin.clone();
+//                hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
+//                this.physicsObject.startGrab(hit);
+//                this.active = true;
+//                this.controls.enabled = false;
+//            }
+//        }
+//    }
+//    move(x, y) {
+//        if (this.active) {
+//            this.updateRaycaster(x, y);
+//            let hit = this.raycaster.ray.origin.clone();
+//            hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
+//            if (this.physicsObject != null)
+//                this.physicsObject.moveGrabbed(hit);
+//        }
+//    }
+//    end() {
+//        if (this.active) {
+//            if (this.physicsObject != null) {
+//                this.physicsObject.endGrab();
+//                this.physicsObject = null;
+//            }
+//            this.active = false;
+//            this.controls.enabled = true;
+//        }
+//    }
+//
+//    onPointer(evt) {
+//        evt.preventDefault();
+//        if (evt.type == "pointerdown") {
+//            this.start(evt.clientX, evt.clientY);
+//            this.mouseDown = true;
+//        } else if (evt.type == "pointermove" && this.mouseDown) {
+//            if (this.active)
+//                this.move(evt.clientX, evt.clientY);
+//        } else if (evt.type == "pointerup" || evt.type == "pointerout") {
+//            this.end();
+//            this.mouseDown = false;
+//        }
+//    }
+//}
