@@ -693,23 +693,24 @@ export class SoftBodyGPU {
     }
 
     updateVisMesh() {
-        //const positions = this.visMesh.geometry.attributes.position.array;
-        //let nr = 0;
-        //for (let i = 0; i < this.numVisVerts; i++) {
-        //    let tetNr = this.visVerts[nr++] * 4;
-        //    let b0 = this.visVerts[nr++];
-        //    let b1 = this.visVerts[nr++];
-        //    let b2 = this.visVerts[nr++];
-        //    let b3 = 1.0 - b0 - b1 - b2;
-        //    this.vecSetZero(positions, i);
-        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b0);
-        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b1);
-        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b2);
-        //    this.vecAdd(positions, i, this.pos, this.tetIds[tetNr++], b3);
-        //}
-        //this.visMesh.geometry.computeVertexNormals();
-        //this.visMesh.geometry.attributes.position.needsUpdate = true;
-        //this.visMesh.geometry.computeBoundingSphere();
+        const positions = this.visMesh.geometry.attributes.position.array;
+        const tetpositions = this.edgeMesh.geometry.attributes.position.array;
+        let nr = 0;
+        for (let i = 0; i < this.numVisVerts; i++) {
+            let tetNr = this.visVerts[nr++] * 4;
+            let b0 = this.visVerts[nr++];
+            let b1 = this.visVerts[nr++];
+            let b2 = this.visVerts[nr++];
+            let b3 = 1.0 - b0 - b1 - b2;
+            this.vecSetZero(positions, i);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b0);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b1);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
+        }
+        this.visMesh.geometry.computeVertexNormals();
+        this.visMesh.geometry.attributes.position.needsUpdate = true;
+        this.visMesh.geometry.computeBoundingSphere();
     }
 
     startGrab(pos) {
