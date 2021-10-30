@@ -81,6 +81,8 @@ export class SoftBodyGPU {
             uniform float dt;
             uniform sampler2D elemToParticlesTable, invRestVolume,
                     invRestPoseX, invRestPoseY, invRestPoseZ;
+            vec3[4] g;
+            vec3[4] id;
 
             layout(location = 0) out vec4 vert1;
             layout(location = 1) out vec4 vert2;
@@ -91,28 +93,124 @@ export class SoftBodyGPU {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
 
+            void applyToElem(float C, float compliance, float dt, float invRestVolume, inout vec3[4] id) {
+                if (C == 0.0)
+                    return;
+
+                g[0] = vec3(0);
+                g[0] -= g[1];
+                g[0] -= g[2];
+                g[0] -= g[3];
+
+                float w = 0.0;
+                for (int i = 0; i < 4; i++) {
+                    w += dot(g[i], g[i]);// * vertex[i].invMass;
+                }
+
+                if (w == 0.0) { return; }
+                float alpha = compliance / dt / dt * invRestVolume;
+                float dlambda = -C / (w + alpha);
+
+                for (int i = 0; i < 4; i++) {
+                    id[i].xyz += g[i] * dlambda;// * vertex[i].invMass;
+                }
+            }
+
+            void solveElement(in mat3 invRestPose, in float invRestVolume, inout vec3[4] id) {
+                float C = 0.0;
+                float devCompliance = 1.0/100000.0;
+                float volCompliance = 0.0;
+
+                // tr(F) = 3
+                //P     = new Float32Array(9);
+                //F     = new Float32Array(9);
+                //dF    = new Float32Array(9);
+                //grads = new Float32Array(12); // vec3[4]
+                mat3 ir = invRestPose;
+        
+                // Watch out for transpose issues here
+                mat3 P = mat3(
+                    id[1] - id[0],
+                    id[2] - id[0],
+                    id[3] - id[0]);
+        
+                mat3 F = P * ir;
+        
+                float r_s = sqrt(
+                    dot(F[0], F[0]) +
+                    dot(F[1], F[1]) +
+                    dot(F[1], F[2]));
+                float r_s_inv = 1.0 / r_s;
+        
+                g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
+                g[1] += F[0] * r_s_inv * ir[0][0];
+                g[1] += F[1] * r_s_inv * ir[0][1];
+                g[1] += F[2] * r_s_inv * ir[0][2];
+                g[2] += F[0] * r_s_inv * ir[1][0];
+                g[2] += F[1] * r_s_inv * ir[1][1];
+                g[2] += F[2] * r_s_inv * ir[1][2];
+                g[3] += F[0] * r_s_inv * ir[2][0];
+                g[3] += F[1] * r_s_inv * ir[2][1];
+                g[3] += F[2] * r_s_inv * ir[2][2];
+        
+                C = r_s;
+        
+                // Non gradient pass?
+                applyToElem(C, devCompliance, dt, invRestVolume, id); //
+        
+                // det F = 1
+        
+                P = mat3(
+                    id[1] - id[0],
+                    id[2] - id[0],
+                    id[3] - id[0]);
+        
+                F = P * ir;
+        
+                mat3 dF = mat3(
+                    cross(F[1], F[2]),
+                    cross(F[2], F[0]),
+                    cross(F[0], F[1]));
+        
+                g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
+                g[1] += dF[0] * ir[0][0];
+                g[1] += dF[1] * ir[0][1];
+                g[1] += dF[2] * ir[0][2];
+                g[2] += dF[0] * ir[1][0];
+                g[2] += dF[1] * ir[1][1];
+                g[2] += dF[2] * ir[1][2];
+                g[3] += dF[0] * ir[2][0];
+                g[3] += dF[1] * ir[2][1];
+                g[3] += dF[2] * ir[2][2];
+        
+                float vol = determinant(F);
+                C = vol - 1.0 - volCompliance / devCompliance;
+                applyToElem(C, volCompliance, dt, invRestVolume, id);
+            }
+
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
-                float invVolume   = texture2D( invRestVolume, uv ).x;
-                mat3  invRestPose = mat3(
+                float invVolume  = texture2D( invRestVolume, uv ).x;
+                mat3 invRestPose = mat3(
                     texture2D( invRestPoseX, uv).xyz,
                     texture2D( invRestPoseY, uv).xyz,
                     texture2D( invRestPoseZ, uv).xyz);
 
                 // Gather this tetrahedron's 4 vertices
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
-                vec4 id0 = texture2D( texturePos, uvFromIndex(int(tetIndices.x)));
-                vec4 id1 = texture2D( texturePos, uvFromIndex(int(tetIndices.y)));
-                vec4 id2 = texture2D( texturePos, uvFromIndex(int(tetIndices.z)));
-                vec4 id3 = texture2D( texturePos, uvFromIndex(int(tetIndices.w)));
+                id[0] = texture2D( texturePos, uvFromIndex(int(tetIndices.x))).xyz;
+                id[1] = texture2D( texturePos, uvFromIndex(int(tetIndices.y))).xyz;
+                id[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
+                id[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
 
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
+                //solveElement(invRestPose, invVolume, id);
 
-                vert1 = id0;
-                vert2 = id1;
-                vert3 = id2;
-                vert4 = id3;
+                vert1 = vec4(id[0], 0);
+                vert2 = vec4(id[1], 0);
+                vert3 = vec4(id[2], 0);
+                vert4 = vec4(id[3], 0);
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
