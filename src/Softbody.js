@@ -10,6 +10,9 @@ export class SoftBody {
         this.numElems = tetIds.length / 4;
 
         this.pos = vertices.slice(0);
+        this.accumOne = new Float32Array(12);
+        this.accum = new Float32Array(3 * this.numParticles);
+        this.accumWeight = new Float32Array(this.numParticles);
         this.prevPos = vertices.slice(0);
         this.vel = new Float32Array(3 * this.numParticles);
         this.invMass = new Float32Array(this.numParticles);
@@ -92,6 +95,7 @@ export class SoftBody {
         let C = 0.0;
         let g = this.grads;
         let ir = this.invRestPose;
+        for (let i = 0; i < this.accumOne.length; i++) { this.accumOne[i] = 0.0; }
 
         // tr(F) = 3
 
@@ -106,7 +110,10 @@ export class SoftBody {
 
         this.matSetMatProduct(this.F, 0, this.P, 0, this.invRestPose, elemNr);
 
-        let r_s = Math.sqrt(this.vecLengthSquared(this.F, 0) + this.vecLengthSquared(this.F, 1) + this.vecLengthSquared(this.F, 2));
+        let r_s = Math.sqrt(
+            this.vecLengthSquared(this.F, 0) +
+            this.vecLengthSquared(this.F, 1) +
+            this.vecLengthSquared(this.F, 2));
         let r_s_inv = 1.0 / r_s;
 
         this.vecSetZero(g, 1);
@@ -131,9 +138,21 @@ export class SoftBody {
         
         // det F = 1
 
-        this.vecSetDiff(this.P, 0, this.pos, id1, this.pos, id0);
-        this.vecSetDiff(this.P, 1, this.pos, id2, this.pos, id0);
-        this.vecSetDiff(this.P, 2, this.pos, id3, this.pos, id0);
+        // Try Jacobi method...
+        let newid0 = new Float32Array(3); let newid1 = new Float32Array(3);
+        let newid2 = new Float32Array(3); let newid3 = new Float32Array(3);
+        this.vecAdd(newid0, 0, this.pos, id0, 1.0); 
+        this.vecAdd(newid0, 0, this.accumOne, 0, 1.0);
+        this.vecAdd(newid1, 0, this.pos, id1, 1.0); 
+        this.vecAdd(newid1, 0, this.accumOne, 1, 1.0);
+        this.vecAdd(newid2, 0, this.pos, id2, 1.0); 
+        this.vecAdd(newid2, 0, this.accumOne, 2, 1.0);
+        this.vecAdd(newid3, 0, this.pos, id3, 1.0); 
+        this.vecAdd(newid3, 0, this.accumOne, 3, 1.0);
+
+        this.vecSetDiff(this.P, 0, newid1, 0, newid0, 0);
+        this.vecSetDiff(this.P, 1, newid2, 0, newid0, 0);
+        this.vecSetDiff(this.P, 2, newid3, 0, newid0, 0);
 
         this.matSetMatProduct(this.F, 0, this.P, 0, this.invRestPose, elemNr);
 
@@ -162,10 +181,10 @@ export class SoftBody {
 
         this.volError += vol - 1.0;
         
-        this.applyToElem(elemNr, C, this.physicsParams.volCompliance, dt);
+        this.applyToElem(elemNr, C, this.physicsParams.volCompliance, dt, true);
     }
 
-    applyToElem(elemNr, C, compliance, dt) {
+    applyToElem(elemNr, C, compliance, dt, addToAccum) {
         if (C == 0.0)
             return;
         let g = this.grads;
@@ -188,7 +207,13 @@ export class SoftBody {
 
         for (let i = 0; i < 4; i++) {
             let id = this.tetIds[4 * elemNr + i];
-            this.vecAdd(this.pos, id, g, i, dlambda * this.invMass[id]);
+            //this.vecAdd(this.pos, id, g, i, dlambda * this.invMass[id]);
+            this.vecAdd(this.accumOne, i, g, i, dlambda * this.invMass[id]);
+
+            if (addToAccum) {
+                this.vecAdd(this.accum, id, this.accumOne, i, 1.0);
+                this.accumWeight[id] += 1.0;
+            }
         }
     }
 
@@ -202,11 +227,17 @@ export class SoftBody {
         }
 
         // solve
+        for (let i = 0; i < this.accumWeight.length; i++) { this.accumWeight[i] = 0.0; }
+        for(let i = 0; i < this.accum.length; i++) { this.accum[i] = 0.0; }
 
         this.volError = 0.0;
         for (let i = 0; i < this.numElems; i++)
             this.solveElem(i, dt);
         this.volError /= this.numElems;
+
+        for (let i = 0; i < this.numParticles; i++) {
+            this.vecAdd(this.pos, i, this.accum, i, 1.0/this.accumWeight[i]);
+        }
 
         // ground collision
 
