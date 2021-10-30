@@ -103,9 +103,7 @@ export class SoftBodyGPU {
                 g[0] -= g[3];
 
                 float w = 0.0;
-                for (int i = 0; i < 4; i++) {
-                    w += dot(g[i], g[i]) * invMass[i];
-                }
+                for (int i = 0; i < 4; i++) { w += dot(g[i], g[i]) * invMass[i]; }
 
                 if (w == 0.0) { return; }
                 float alpha = compliance / dt / dt * invRestVolume;
@@ -156,7 +154,7 @@ export class SoftBodyGPU {
                 C = r_s;
         
                 // Non gradient pass?
-                applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
+                //applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
         
                 // det F = 1
         
@@ -185,7 +183,7 @@ export class SoftBodyGPU {
         
                 float vol = determinant(F);
                 C = vol - 1.0 - volCompliance / devCompliance;
-                applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
+                //applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
             }
 
             void main()	{
@@ -212,6 +210,16 @@ export class SoftBodyGPU {
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
                 solveElement(invRestPose, invVolume, id, invMass);
 
+                // Ultra Simplified experiment: Use the rest pose directly without any rotation
+                mat3 restPose = inverse(invRestPose);
+                id[0] = ((id[1] - restPose[0]) +
+                         (id[2] - restPose[1]) +
+                         (id[3] - restPose[2])) / 3.0;
+                id[1] = id[0] + restPose[0];
+                id[2] = id[0] + restPose[1];
+                id[3] = id[0] + restPose[2];
+
+                // Write out the new positions
                 vert1 = vec4(id[0], 0);
                 vert2 = vec4(id[1], 0);
                 vert3 = vec4(id[2], 0);
@@ -339,7 +347,7 @@ export class SoftBodyGPU {
                 { map: this.gpuCompute.getCurrentRenderTarget(this.debugElem4).texture, side: THREE.DoubleSide });
             this.labelPlane = new THREE.PlaneGeometry(1, 1);
             this.labelMesh = new THREE.Mesh(this.labelPlane, this.labelMaterial);
-            this.labelMesh.position.set(0, 1, 0);
+            this.labelMesh.position.set(0, 2.5, 0);
             world.scene.add(this.labelMesh);
         }
 
