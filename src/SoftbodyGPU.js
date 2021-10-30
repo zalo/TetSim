@@ -498,6 +498,23 @@ export class SoftBodyGPU {
     // ----------------- begin solver -----------------------------------------------------                
 
     simulate(dt, physicsParams) {
+        physicsParams.dt = dt;
+
+        this.xpbdIntegratePass.material.uniforms['dt'] = { value: physicsParams.dt };
+        this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
+        this.xpbdIntegratePass.material.needsUpdate = true;
+        this.solveElemPass.material.uniforms['dt'      ] = { value: physicsParams.dt };
+        this.solveElemPass.material.uniformsNeedUpdate = true;
+        this.solveElemPass.material.needsUpdate = true;
+        this.collisionPass.material.uniforms['dt'      ] = { value: physicsParams.dt };
+        this.collisionPass.material.uniforms['friction'] = { value: physicsParams.friction };
+        this.collisionPass.material.uniformsNeedUpdate = true;
+        this.collisionPass.material.needsUpdate = true;
+        this.xpbdVelocityPass.material.uniforms['dt'     ] = { value: physicsParams.dt };
+        this.xpbdVelocityPass.material.uniforms['gravity'] = { value: physicsParams.gravity };
+        this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
+        this.xpbdVelocityPass.material.needsUpdate = true;
+
         // Run a substep!
         this.gpuCompute.compute();
     }
