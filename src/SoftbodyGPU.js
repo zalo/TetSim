@@ -80,9 +80,9 @@ export class SoftBodyGPU {
         this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos], `
             uniform float dt;
             uniform sampler2D elemToParticlesTable, invRestVolume,
-                    invRestPoseX, invRestPoseY, invRestPoseZ;
-            vec3[4] g;
-            vec3[4] id;
+                    invRestPoseX, invRestPoseY, invRestPoseZ, invMassTex;
+            vec3[4] g, id;
+            float[4] invMass;
 
             layout(location = 0) out vec4 vert1;
             layout(location = 1) out vec4 vert2;
@@ -93,7 +93,7 @@ export class SoftBodyGPU {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
 
-            void applyToElem(float C, float compliance, float dt, float invRestVolume, inout vec3[4] id) {
+            void applyToElem(float C, float compliance, float dt, float invRestVolume, inout vec3[4] id, in float[4] invMass) {
                 if (C == 0.0)
                     return;
 
@@ -104,7 +104,7 @@ export class SoftBodyGPU {
 
                 float w = 0.0;
                 for (int i = 0; i < 4; i++) {
-                    w += dot(g[i], g[i]);// * vertex[i].invMass;
+                    w += dot(g[i], g[i]) * invMass[i];
                 }
 
                 if (w == 0.0) { return; }
@@ -112,11 +112,11 @@ export class SoftBodyGPU {
                 float dlambda = -C / (w + alpha);
 
                 for (int i = 0; i < 4; i++) {
-                    id[i].xyz += g[i] * dlambda;// * vertex[i].invMass;
+                    id[i].xyz += g[i] * dlambda * invMass[i];
                 }
             }
 
-            void solveElement(in mat3 invRestPose, in float invRestVolume, inout vec3[4] id) {
+            void solveElement(in mat3 invRestPose, in float invRestVolume, inout vec3[4] id, in float[4] invMass) {
                 float C = 0.0;
                 float devCompliance = 1.0/100000.0;
                 float volCompliance = 0.0;
@@ -156,7 +156,7 @@ export class SoftBodyGPU {
                 C = r_s;
         
                 // Non gradient pass?
-                applyToElem(C, devCompliance, dt, invRestVolume, id); //
+                applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
         
                 // det F = 1
         
@@ -185,17 +185,17 @@ export class SoftBodyGPU {
         
                 float vol = determinant(F);
                 C = vol - 1.0 - volCompliance / devCompliance;
-                applyToElem(C, volCompliance, dt, invRestVolume, id);
+                applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
             }
 
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
                 float invVolume  = texture2D( invRestVolume, uv ).x;
-                mat3 invRestPose = mat3(
+                mat3 invRestPose = /*transpose*/(mat3(
                     texture2D( invRestPoseX, uv).xyz,
                     texture2D( invRestPoseY, uv).xyz,
-                    texture2D( invRestPoseZ, uv).xyz);
+                    texture2D( invRestPoseZ, uv).xyz));
 
                 // Gather this tetrahedron's 4 vertices
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
@@ -204,8 +204,13 @@ export class SoftBodyGPU {
                 id[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
                 id[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
 
+                invMass[0] = texture2D( invMassTex, uvFromIndex(int(tetIndices.x))).x;
+                invMass[1] = texture2D( invMassTex, uvFromIndex(int(tetIndices.y))).x;
+                invMass[2] = texture2D( invMassTex, uvFromIndex(int(tetIndices.z))).x;
+                invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
+
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
-                //solveElement(invRestPose, invVolume, id);
+                solveElement(invRestPose, invVolume, id, invMass);
 
                 vert1 = vec4(id[0], 0);
                 vert2 = vec4(id[1], 0);
@@ -215,6 +220,7 @@ export class SoftBodyGPU {
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
         this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolume };
+        this.solveElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
         this.solveElemPass.material.uniforms['invRestPoseX'        ] = { value: this.invRestPoseX };
         this.solveElemPass.material.uniforms['invRestPoseY'        ] = { value: this.invRestPoseY };
         this.solveElemPass.material.uniforms['invRestPoseZ'        ] = { value: this.invRestPoseZ };
@@ -489,7 +495,7 @@ export class SoftBodyGPU {
         }
 
         for (let i = 0; i < this.invMass.image.data.length; i++) {
-            if (this.invMass[i] != 0.0) { this.invMass[i] = 1.0 / this.invMass[i]; }
+            if (this.invMass.image.data[i] != 0.0) { this.invMass.image.data[i] = 1.0 / this.invMass.image.data[i]; }
         }
 
     }
