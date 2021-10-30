@@ -31,6 +31,11 @@ export class SoftBodyGPU {
         this.particleToElemVertsTable = [this.gpuCompute.createTexture(), // Maps from vertices back to the elems gbuffer for the scatter step
                                      this.gpuCompute.createTexture(), // There is more than one because a particle may have a bunch of elems sharing it
                                      this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture()];
 
         // Fill in the above textures with the appropriate data
@@ -137,7 +142,7 @@ export class SoftBodyGPU {
                 float r_s = sqrt(
                     dot(F[0], F[0]) +
                     dot(F[1], F[1]) +
-                    dot(F[1], F[2]));
+                    dot(F[2], F[2]));
                 float r_s_inv = 1.0 / r_s;
         
                 g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
@@ -154,7 +159,7 @@ export class SoftBodyGPU {
                 C = r_s;
         
                 // Non gradient pass?
-                //applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
+                applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
         
                 // det F = 1
         
@@ -183,7 +188,7 @@ export class SoftBodyGPU {
         
                 float vol = determinant(F);
                 C = vol - 1.0 - volCompliance / devCompliance;
-                //applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
+                applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
             }
 
             void main()	{
@@ -208,16 +213,16 @@ export class SoftBodyGPU {
                 invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
 
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
-                solveElement(invRestPose, invVolume, id, invMass);
+                //solveElement(invRestPose, invVolume, id, invMass);
 
                 // Ultra Simplified experiment: Use the rest pose directly without any rotation
                 mat3 restPose = inverse(invRestPose);
                 id[0] = ((id[1] - restPose[0]) +
                          (id[2] - restPose[1]) +
-                         (id[3] - restPose[2])) / 3.0;
-                id[1] = id[0] + restPose[0];
-                id[2] = id[0] + restPose[1];
-                id[3] = id[0] + restPose[2];
+                         (id[3] - restPose[2])) * 0.3333;
+                id[1] = ((id[0] + restPose[0]));
+                id[2] = ((id[0] + restPose[1]));
+                id[3] = ((id[0] + restPose[2]));
 
                 // Write out the new positions
                 vert1 = vec4(id[0], 0);
@@ -254,7 +259,7 @@ export class SoftBodyGPU {
         `
             out highp vec4 pc_fragColor;
             uniform float dt;
-            uniform sampler2D particleToElemVertsTable[4];
+            uniform sampler2D particleToElemVertsTable[9];
 
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
@@ -278,6 +283,16 @@ export class SoftBodyGPU {
                     result  = texture2D( particleToElemVertsTable[2], uv );
                 } else if (index == 3) {
                     result  = texture2D( particleToElemVertsTable[3], uv );
+                } else if (index == 4) {
+                    result  = texture2D( particleToElemVertsTable[4], uv );
+                } else if (index == 5) {
+                    result  = texture2D( particleToElemVertsTable[5], uv );
+                } else if (index == 6) {
+                    result  = texture2D( particleToElemVertsTable[6], uv );
+                } else if (index == 7) {
+                    result  = texture2D( particleToElemVertsTable[7], uv );
+                } else if (index == 7) {
+                    result  = texture2D( particleToElemVertsTable[8], uv );
                 }
                 return result;
            }
@@ -285,7 +300,7 @@ export class SoftBodyGPU {
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
 
                 vec4 sumVertex = vec4(0.0);
-                for(int tableId = 0; tableId < 4; tableId++) {
+                for(int tableId = 0; tableId < 8; tableId++) {
                     vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
                     for(int component = 0; component < 4; component++) {
                         if(vertIndices[component] > 0.0) {
@@ -417,6 +432,11 @@ export class SoftBodyGPU {
             this.particleToElemVertsTable[1].image.data[i] = -1.0;
             this.particleToElemVertsTable[2].image.data[i] = -1.0;
             this.particleToElemVertsTable[3].image.data[i] = -1.0;
+            this.particleToElemVertsTable[4].image.data[i] = -1.0;
+            this.particleToElemVertsTable[5].image.data[i] = -1.0;
+            this.particleToElemVertsTable[6].image.data[i] = -1.0;
+            this.particleToElemVertsTable[7].image.data[i] = -1.0;
+            this.particleToElemVertsTable[8].image.data[i] = -1.0;
         }
 
         // Initialize the positions of the vertices
@@ -460,6 +480,8 @@ export class SoftBodyGPU {
                     for (let c = 0; c < 4; c++) {
                         if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] <= 0.0) {
                             this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0 * i) + id;
+                            biggestT = Math.max(biggestT, t);
+                            if (t == 8) { console.log((4 * ids[id]) + c);}
                             assigned = true; break;
                         }
                     }
@@ -506,6 +528,8 @@ export class SoftBodyGPU {
             if (this.invMass.image.data[i] != 0.0) { this.invMass.image.data[i] = 1.0 / this.invMass.image.data[i]; }
         }
 
+        console.log(biggestT);
+        console.log(this.particleToElemVertsTable[8].image.data);
     }
 
     // ----------------- begin solver -----------------------------------------------------                
@@ -536,7 +560,7 @@ export class SoftBodyGPU {
         let r_s = Math.sqrt(
             dot(this.F[0], this.F[0]) +
             dot(this.F[1], this.F[1]) +
-            dot(this.F[1], this.F[2]));
+            dot(this.F[2], this.F[2]));
         let r_s_inv = 1.0 / r_s;
 
         g[1] = vec3(0);
