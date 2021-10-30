@@ -102,17 +102,17 @@ export class SoftBodyGPU {
 
                 // Gather this tetrahedron's 4 vertices
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
-                vec4 vert1Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.x)));
-                vec4 vert2Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.y)));
-                vec4 vert3Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.z)));
-                vec4 vert4Pos   = texture2D( texturePos, uvFromIndex(int(tetIndices.w)));
+                vec4 id0 = texture2D( texturePos, uvFromIndex(int(tetIndices.x)));
+                vec4 id1 = texture2D( texturePos, uvFromIndex(int(tetIndices.y)));
+                vec4 id2 = texture2D( texturePos, uvFromIndex(int(tetIndices.z)));
+                vec4 id3 = texture2D( texturePos, uvFromIndex(int(tetIndices.w)));
 
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
 
-                vert1 = vert1Pos;
-                vert2 = vert2Pos;
-                vert3 = vert3Pos;
-                vert4 = vert4Pos;
+                vert1 = id0;
+                vert2 = id1;
+                vert3 = id2;
+                vert4 = id3;
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
@@ -246,11 +246,6 @@ export class SoftBodyGPU {
         this.grabId  = -1;
 
         // solve data: define here to avoid memory allocation during solve
-
-        //this.P     = new Float32Array(9);
-        //this.F     = new Float32Array(9);
-        //this.dF    = new Float32Array(9);
-        //this.grads = new Float32Array(12);
 
         // visual edge mesh
 
@@ -403,75 +398,85 @@ export class SoftBodyGPU {
 
     // ----------------- begin solver -----------------------------------------------------                
 
-    solveElem(elemNr, dt) {
+    solveElemSimple(elemNr, dt) {
         let C = 0.0;
+        // tr(F) = 3
+        //this.P     = new Float32Array(9);
+        //this.F     = new Float32Array(9);
+        //this.dF    = new Float32Array(9);
+        //this.grads = new Float32Array(12); // vec3[4]
         let g = this.grads;
         let ir = this.invRestPose;
 
-        // tr(F) = 3
+        let id0 = this.pos[this.tetIds[4 * elemNr]];
+        let id1 = this.pos[this.tetIds[4 * elemNr + 1]];
+        let id2 = this.pos[this.tetIds[4 * elemNr + 2]];
+        let id3 = this.pos[this.tetIds[4 * elemNr + 3]];
 
-        let id0 = this.tetIds[4 * elemNr];
-        let id1 = this.tetIds[4 * elemNr + 1];
-        let id2 = this.tetIds[4 * elemNr + 2];
-        let id3 = this.tetIds[4 * elemNr + 3];
+        // Watch out for transpose issues here
+        this.P = mat3(
+            id1 - id0,
+            id2 - id0,
+            id3 - id0);
 
-        this.vecSetDiff(this.P, 0, this.pos, id1, this.pos, id0);
-        this.vecSetDiff(this.P, 1, this.pos, id2, this.pos, id0);
-        this.vecSetDiff(this.P, 2, this.pos, id3, this.pos, id0);
+        this.F = this.P * ir;
 
-        this.matSetMatProduct(this.F, 0, this.P, 0, this.invRestPose, elemNr);
-
-        let r_s = Math.sqrt(this.vecLengthSquared(this.F, 0) + this.vecLengthSquared(this.F, 1) + this.vecLengthSquared(this.F, 2));
+        let r_s = Math.sqrt(
+            dot(this.F[0], this.F[0]) +
+            dot(this.F[1], this.F[1]) +
+            dot(this.F[1], this.F[2]));
         let r_s_inv = 1.0 / r_s;
 
-        this.vecSetZero(g, 1);
-        this.vecAdd(g, 1, this.F, 0, r_s_inv * this.matIJ(ir, elemNr, 0, 0));
-        this.vecAdd(g, 1, this.F, 1, r_s_inv * this.matIJ(ir, elemNr, 0, 1));
-        this.vecAdd(g, 1, this.F, 2, r_s_inv * this.matIJ(ir, elemNr, 0, 2));
+        g[1] = vec3(0);
+        g[1] += this.F[0] * r_s_inv * ir[0][0]
+        g[1] += this.F[1] * r_s_inv * ir[0][1]
+        g[1] += this.F[2] * r_s_inv * ir[0][2]
 
-        this.vecSetZero(g, 2);
-        this.vecAdd(g, 2, this.F, 0, r_s_inv * this.matIJ(ir, elemNr, 1, 0));
-        this.vecAdd(g, 2, this.F, 1, r_s_inv * this.matIJ(ir, elemNr, 1, 1));
-        this.vecAdd(g, 2, this.F, 2, r_s_inv * this.matIJ(ir, elemNr, 1, 2));
+        g[2] = vec3(0);
+        g[2] += this.F[0] * r_s_inv * ir[1][0]
+        g[2] += this.F[1] * r_s_inv * ir[1][1]
+        g[2] += this.F[2] * r_s_inv * ir[1][2]
 
-        this.vecSetZero(g, 3);
-        this.vecAdd(g, 3, this.F, 0, r_s_inv * this.matIJ(ir, elemNr, 2, 0));
-        this.vecAdd(g, 3, this.F, 1, r_s_inv * this.matIJ(ir, elemNr, 2, 1));
-        this.vecAdd(g, 3, this.F, 2, r_s_inv * this.matIJ(ir, elemNr, 2, 2));
+        g[3] = vec3(0);
+        g[3] += this.F[0] * r_s_inv * ir[2][0]
+        g[3] += this.F[1] * r_s_inv * ir[2][1]
+        g[3] += this.F[2] * r_s_inv * ir[2][2]
 
         C = r_s;
 
-
+        // APPLY TO ELEM IN MIDDLE OF IT!
         this.applyToElem(elemNr, C, this.physicsParams.devCompliance, dt);
-        
+
         // det F = 1
 
-        this.vecSetDiff(this.P, 0, this.pos, id1, this.pos, id0);
-        this.vecSetDiff(this.P, 1, this.pos, id2, this.pos, id0);
-        this.vecSetDiff(this.P, 2, this.pos, id3, this.pos, id0);
+        this.P = mat3(
+            tet1 - tet0,
+            tet2 - tet0,
+            tet3 - tet0);
 
-        this.matSetMatProduct(this.F, 0, this.P, 0, this.invRestPose, elemNr);
+        this.F = this.P * ir;
 
-        this.vecSetCross(this.dF, 0, this.F, 1, this.F, 2);
-        this.vecSetCross(this.dF, 1, this.F, 2, this.F, 0);
-        this.vecSetCross(this.dF, 2, this.F, 0, this.F, 1);
+        this.dF = mat3(
+            cross(this.F[1], this.F[2]) +
+            cross(this.F[2], this.F[0]) +
+            cross(this.F[0], this.F[1]))
 
-        this.vecSetZero(g, 1);
-        this.vecAdd(g, 1, this.dF, 0, this.matIJ(ir, elemNr, 0, 0));
-        this.vecAdd(g, 1, this.dF, 1, this.matIJ(ir, elemNr, 0, 1));
-        this.vecAdd(g, 1, this.dF, 2, this.matIJ(ir, elemNr, 0, 2));
+        g[1] = vec3(0);
+        g[1] += this.dF[0] * ir[0][0]
+        g[1] += this.dF[1] * ir[0][1]
+        g[1] += this.dF[2] * ir[0][2]
 
-        this.vecSetZero(g, 2);
-        this.vecAdd(g, 2, this.dF, 0, this.matIJ(ir, elemNr, 1, 0));
-        this.vecAdd(g, 2, this.dF, 1, this.matIJ(ir, elemNr, 1, 1));
-        this.vecAdd(g, 2, this.dF, 2, this.matIJ(ir, elemNr, 1, 2));
+        g[2] = vec3(0);
+        g[2] += this.dF[0] * ir[1][0]
+        g[2] += this.dF[1] * ir[1][1]
+        g[2] += this.dF[2] * ir[1][2]
 
-        this.vecSetZero(g, 3);
-        this.vecAdd(g, 3, this.dF, 0, this.matIJ(ir, elemNr, 2, 0));
-        this.vecAdd(g, 3, this.dF, 1, this.matIJ(ir, elemNr, 2, 1));
-        this.vecAdd(g, 3, this.dF, 2, this.matIJ(ir, elemNr, 2, 2));
+        g[3] = vec3(0);
+        g[3] += this.dF[0] * ir[2][0]
+        g[3] += this.dF[1] * ir[2][1]
+        g[3] += this.dF[2] * ir[2][2]
 
-        let vol = this.matGetDeterminant(this.F, 0);
+        let vol = det(this.F);
         //C = vol - 1.0 - ((1.0 / this.physicsParams.devCompliance) / (1.0 / this.physicsParams.volCompliance));
         C = vol - 1.0 - this.physicsParams.volCompliance / this.physicsParams.devCompliance;
 
@@ -485,31 +490,27 @@ export class SoftBodyGPU {
             return;
         let g = this.grads;
 
-        this.vecSetZero(g, 0);
-        this.vecAdd(g, 0, g, 1, -1.0);
-        this.vecAdd(g, 0, g, 2, -1.0);
-        this.vecAdd(g, 0, g, 3, -1.0);
+        g[0] = vec3(0);
+        g[0] -= this.g[1]
+        g[0] -= this.g[2]
+        g[0] -= this.g[3]
 
         let w = 0.0;
         for (let i = 0; i < 4; i++) {
-            let id = this.tetIds[4 * elemNr + i];
-            w += this.vecLengthSquared(g, i) * this.invMass[id];
+            w += dot(g[i], g[i]) * vertex[i].invMass;
         }
 
         if (w == 0.0)
             return;
-        let alpha = compliance / dt / dt * this.invRestVolume[elemNr];
+        let alpha = compliance / dt / dt * this.invRestVolume;
         let dlambda = -C / (w + alpha);
 
         for (let i = 0; i < 4; i++) {
-            let id = this.tetIds[4 * elemNr + i];
-            this.vecAdd(this.pos, id, g, i, dlambda * this.invMass[id]);
+            vertex[i] += g[i] * dlambda * vertex[i].invMass;
         }
     }
 
     simulate(dt, physicsParams) {
-        // TODO: Update the Simulation Uniforms
-
         // Run a substep!
         this.gpuCompute.compute();
     }
