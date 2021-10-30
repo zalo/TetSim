@@ -145,6 +145,7 @@ export class SoftBodyGPU {
                     dot(F[2], F[2]));
                 float r_s_inv = 1.0 / r_s;
         
+                ir = transpose(ir);
                 g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
                 g[1] += F[0] * r_s_inv * ir[0][0];
                 g[1] += F[1] * r_s_inv * ir[0][1];
@@ -155,6 +156,7 @@ export class SoftBodyGPU {
                 g[3] += F[0] * r_s_inv * ir[2][0];
                 g[3] += F[1] * r_s_inv * ir[2][1];
                 g[3] += F[2] * r_s_inv * ir[2][2];
+                ir = transpose(ir);
         
                 C = r_s;
         
@@ -175,6 +177,7 @@ export class SoftBodyGPU {
                     cross(F[2], F[0]),
                     cross(F[0], F[1]));
         
+                ir = transpose(ir);
                 g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
                 g[1] += dF[0] * ir[0][0];
                 g[1] += dF[1] * ir[0][1];
@@ -185,6 +188,7 @@ export class SoftBodyGPU {
                 g[3] += dF[0] * ir[2][0];
                 g[3] += dF[1] * ir[2][1];
                 g[3] += dF[2] * ir[2][2];
+                ir = transpose(ir);
         
                 float vol = determinant(F);
                 C = vol - 1.0 - volCompliance / devCompliance;
@@ -213,16 +217,16 @@ export class SoftBodyGPU {
                 invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
 
                 // TODO: Perform the NeoHookean Tet Constraint Resolution Step
-                //solveElement(invRestPose, invVolume, id, invMass);
+                solveElement(invRestPose, invVolume, id, invMass);
 
                 // Ultra Simplified experiment: Use the rest pose directly without any rotation
-                mat3 restPose = inverse(invRestPose);
-                id[0] = ((id[1] - restPose[0]) +
-                         (id[2] - restPose[1]) +
-                         (id[3] - restPose[2])) * 0.3333;
-                id[1] = ((id[0] + restPose[0]));
-                id[2] = ((id[0] + restPose[1]));
-                id[3] = ((id[0] + restPose[2]));
+                //mat3 restPose = inverse(invRestPose);
+                //id[0] = ((id[1] - restPose[0]) +
+                //         (id[2] - restPose[1]) +
+                //         (id[3] - restPose[2])) * 0.3333;
+                //id[1] = ((id[0] + restPose[0]));
+                //id[2] = ((id[0] + restPose[1]));
+                //id[3] = ((id[0] + restPose[2]));
 
                 // Write out the new positions
                 vert1 = vec4(id[0], 0);
