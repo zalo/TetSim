@@ -8,13 +8,12 @@ export class SoftBodyGPU {
         /** @type {THREE.WebGLRenderer} */ 
         this.renderer = world.renderer;
 
-        this.numParticles      = vertices.length / 3;
-        this.numElems          = tetIds.length / 4;
-        console.log(this.numParticles, this.numElems);
-        this.texDim            = Math.ceil(Math.sqrt(this.numElems));
-        this.tetPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
+        this.numParticles       = vertices.length / 3;
+        this.numElems           = tetIds.length / 4;
+        this.texDim             = Math.ceil(Math.sqrt(this.numElems));
+        this.tetPositionsArray  = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
         this.elemPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
-        this.inputPos          = vertices.slice(0);
+        this.inputPos           = vertices.slice(0);
 
         // Initialize the General Purpose GPU Computation Renderer
         this.gpuCompute = new MultiTargetGPUComputationRenderer(this.texDim, this.texDim, this.renderer)
@@ -82,11 +81,11 @@ export class SoftBodyGPU {
         // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
 
         // 3. Gather into the Elements and Enforce Element Shape Constraint
-        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos], `
+        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos, this.elems], `
             uniform float dt;
             uniform sampler2D elemToParticlesTable, invRestVolume,
                     invRestPoseX, invRestPoseY, invRestPoseZ, invMassTex;
-            vec3[4] g, id;
+            vec3[4] g, id, restTets, lastRestTets, outVerts;
             float[4] invMass;
 
             layout(location = 0) out vec4 vert1;
@@ -98,101 +97,37 @@ export class SoftBodyGPU {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
 
-            void applyToElem(float C, float compliance, float dt, float invRestVolume, inout vec3[4] id, in float[4] invMass) {
-                if (C == 0.0)
-                    return;
-
-                g[0] = vec3(0);
-                g[0] -= g[1];
-                g[0] -= g[2];
-                g[0] -= g[3];
-
-                float w = 0.0;
-                for (int i = 0; i < 4; i++) { w += dot(g[i], g[i]) * invMass[i]; }
-
-                if (w == 0.0) { return; }
-                float alpha = compliance / dt / dt * invRestVolume;
-                float dlambda = -C / (w + alpha);
-
-                for (int i = 0; i < 4; i++) {
-                    id[i].xyz += g[i] * dlambda * invMass[i];
-                }
+            mat3 rotationMatrix(vec3 axis, float angle) {
+                axis     = normalize(axis);
+                float s  = sin(angle);
+                float c  = cos(angle);
+                float oc = 1.0 - c;
+                
+                return mat3(oc * axis.x * axis.x + c,           oc * axis.x * axis.y - axis.z * s,  oc * axis.z * axis.x + axis.y * s,
+                            oc * axis.x * axis.y + axis.z * s,  oc * axis.y * axis.y + c,           oc * axis.y * axis.z - axis.x * s,
+                            oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c         );
             }
 
-            void solveElement(in mat3 invRestPose, in float invRestVolume, inout vec3[4] id, in float[4] invMass) {
-                float C = 0.0;
-                float devCompliance = 1.0/100000.0;
-                float volCompliance = 0.0;
+            mat3 extractRotation(vec3[4] tet1, vec3[4] tet2) {
+                mat3 R = mat3(1.0);
+                for (int iter = 0; iter < 2; iter++) { // Increase this to reduce rotational damping
+                    vec3 X = tet1[1] * R;
+                    vec3 Y = tet1[2] * R;
+                    vec3 Z = tet1[3] * R;
 
-                // tr(F) = 3
-                //P     = new Float32Array(9);
-                //F     = new Float32Array(9);
-                //dF    = new Float32Array(9);
-                //grads = new Float32Array(12); // vec3[4]
-                mat3 ir = invRestPose;
-        
-                // Watch out for transpose issues here
-                mat3 P = mat3(
-                    id[1] - id[0],
-                    id[2] - id[0],
-                    id[3] - id[0]);
-        
-                mat3 F = P * ir;
-        
-                float r_s = sqrt(
-                    dot(F[0], F[0]) +
-                    dot(F[1], F[1]) +
-                    dot(F[2], F[2]));
-                float r_s_inv = 1.0 / r_s;
-        
-                ir = transpose(ir);
-                g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
-                g[1] += F[0] * r_s_inv * ir[0][0];
-                g[1] += F[1] * r_s_inv * ir[0][1];
-                g[1] += F[2] * r_s_inv * ir[0][2];
-                g[2] += F[0] * r_s_inv * ir[1][0];
-                g[2] += F[1] * r_s_inv * ir[1][1];
-                g[2] += F[2] * r_s_inv * ir[1][2];
-                g[3] += F[0] * r_s_inv * ir[2][0];
-                g[3] += F[1] * r_s_inv * ir[2][1];
-                g[3] += F[2] * r_s_inv * ir[2][2];
-                ir = transpose(ir);
-        
-                C = r_s;
-        
-                // Non gradient pass?
-                applyToElem(C, devCompliance, dt, invRestVolume, id, invMass); //
-        
-                // det F = 1
-        
-                P = mat3(
-                    id[1] - id[0],
-                    id[2] - id[0],
-                    id[3] - id[0]);
-        
-                F = P * ir;
-        
-                mat3 dF = mat3(
-                    cross(F[1], F[2]),
-                    cross(F[2], F[0]),
-                    cross(F[0], F[1]));
-        
-                ir = transpose(ir);
-                g[1] = vec3(0); g[2] = vec3(0); g[3] = vec3(0);
-                g[1] += dF[0] * ir[0][0];
-                g[1] += dF[1] * ir[0][1];
-                g[1] += dF[2] * ir[0][2];
-                g[2] += dF[0] * ir[1][0];
-                g[2] += dF[1] * ir[1][1];
-                g[2] += dF[2] * ir[1][2];
-                g[3] += dF[0] * ir[2][0];
-                g[3] += dF[1] * ir[2][1];
-                g[3] += dF[2] * ir[2][2];
-                ir = transpose(ir);
-        
-                float vol = determinant(F);
-                C = vol - 1.0 - volCompliance / devCompliance;
-                applyToElem(C, volCompliance, dt, invRestVolume, id, invMass);
+                    vec3 omega =  (cross(X, tet2[1]) +
+                                   cross(Y, tet2[2]) +
+                                   cross(Z, tet2[3])) *
+                          (1.0 / abs(dot(X, tet2[1]) +
+                                     dot(Y, tet2[2]) +
+                                     dot(Z, tet2[3]) + 0.000000001));
+
+                    float w = length(omega);
+                    //if (w < 0.000000001) { break; }
+                    R = R*rotationMatrix(omega / w, w);
+                    //R = rotationMatrix(omega / w, w)*R;
+                }
+                return R;
             }
 
             void main()	{
@@ -211,29 +146,57 @@ export class SoftBodyGPU {
                 id[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
                 id[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
 
+                lastRestTets[0] = texture2D( textureElem[0], uv ).xyz;
+                lastRestTets[1] = texture2D( textureElem[1], uv ).xyz - lastRestTets[0];
+                lastRestTets[2] = texture2D( textureElem[2], uv ).xyz - lastRestTets[0];
+                lastRestTets[3] = texture2D( textureElem[3], uv ).xyz - lastRestTets[0];
+                lastRestTets[0] = vec3(0.0);
+
+                float frameNum = texture2D( textureElem[0], uv ).w;
+
                 invMass[0] = texture2D( invMassTex, uvFromIndex(int(tetIndices.x))).x;
                 invMass[1] = texture2D( invMassTex, uvFromIndex(int(tetIndices.y))).x;
                 invMass[2] = texture2D( invMassTex, uvFromIndex(int(tetIndices.z))).x;
                 invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
 
-                // TODO: Perform the NeoHookean Tet Constraint Resolution Step
-                solveElement(invRestPose, invVolume, id, invMass);
-
-                // Ultra Simplified experiment: Use the rest pose directly without any rotation
+                // Polar Decomposition based Simulation
                 // Looks funny because each tet has the same mass despite being different sizes
-                //mat3 restPose = inverse(invRestPose);
-                //vec3 curCentroid  = (id[0] + id[1] + id[2] + id[3]) * 0.25;
-                //vec3 restCentroid = (restPose[0] + restPose[1] + restPose[2]) * 0.25;
-                //id[0] = -restCentroid + curCentroid;
-                //id[1] = (restPose[0] - restCentroid) + curCentroid;
-                //id[2] = (restPose[1] - restCentroid) + curCentroid;
-                //id[3] = (restPose[2] - restCentroid) + curCentroid;
+                mat3 restPose         = inverse(invRestPose);
+                vec3 curCentroid      = (id[0]       +       id[1] +       id[2] + id[3]) * 0.25;
+                vec3 restCentroid     = (restPose[0] + restPose[1] + restPose[2]        ) * 0.25;
+                vec3 lastRestCentroid = (lastRestTets[0] + lastRestTets[1] + lastRestTets[2] + lastRestTets[3]) * 0.25;
+
+                if(frameNum > 1.0) {
+                    // Vert0 Centered Tetrahedrons
+                    vec3 id0 = id[0];
+                    id[1] -= id[0];
+                    id[2] -= id[0];
+                    id[3] -= id[0];
+                    id[0]  = vec3(0.0);
+
+                    outVerts[1] = (lastRestTets[1]);
+                    outVerts[2] = (lastRestTets[2]);
+                    outVerts[3] = (lastRestTets[3]);
+                    outVerts[0] = vec3(0);
+
+                    mat3 rotation = extractRotation(outVerts, id);//extractRotation(TransposeMult(restTets, id));//
+                    outVerts[0] = ((            - lastRestCentroid) * rotation) + curCentroid;
+                    outVerts[1] = ((outVerts[1] - lastRestCentroid) * rotation) + curCentroid;
+                    outVerts[2] = ((outVerts[2] - lastRestCentroid) * rotation) + curCentroid;
+                    outVerts[3] = ((outVerts[3] - lastRestCentroid) * rotation) + curCentroid;
+
+                } else {
+                    outVerts[0] = id[0];
+                    outVerts[1] = id[1];
+                    outVerts[2] = id[2];
+                    outVerts[3] = id[3];
+                }
 
                 // Write out the new positions
-                vert1 = vec4(id[0], 0);
-                vert2 = vec4(id[1], 0);
-                vert3 = vec4(id[2], 0);
-                vert4 = vec4(id[3], 0);
+                vert1 = vec4(outVerts[0], frameNum + 1.0);
+                vert2 = vec4(outVerts[1], 0);
+                vert3 = vec4(outVerts[2], 0);
+                vert4 = vec4(outVerts[3], 0);
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
@@ -427,7 +390,7 @@ export class SoftBodyGPU {
         let posIndex = 0;
         for (let i = 0; i < this.pos0.image.data.length; i += 4){
             this.pos0.image.data[i  ] = this.inputPos[posIndex++];
-            this.pos0.image.data[i+1] = this.inputPos[posIndex++];
+            this.pos0.image.data[i+1] = this.inputPos[posIndex++] -0.35;
             this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
 
