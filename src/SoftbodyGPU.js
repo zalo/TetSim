@@ -336,6 +336,7 @@ export class SoftBodyGPU {
             void main()	{
                 vec2 uv  = gl_FragCoord.xy / resolution.xy;
                 vec3 pos = texture2D( texturePos    , uv ).xyz;
+                if(grabId == float(indexFromUV(uv))) { pos = grabPos; }
                 pos      = clamp(pos, vec3(-2.5, -1.0, -2.5), vec3(2.5, 10.0, 2.5));
                 // simple friction
                 if(pos.y < 0.0) {
@@ -794,7 +795,7 @@ export class Grabber {
         var intersects = this.raycaster.intersectObjects(this.scene.children);
         if (intersects.length > 0) {
             var obj = intersects[0].object.userData;
-            if (obj instanceof SoftBody) {
+            if (obj instanceof SoftBodyGPU) {
                 this.physicsObject = obj;
                 this.grabDistance = intersects[0].distance;
                 let hit = this.raycaster.ray.origin.clone();
