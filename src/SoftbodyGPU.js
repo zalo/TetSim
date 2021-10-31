@@ -97,38 +97,59 @@ export class SoftBodyGPU {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
 
-            mat3 rotationMatrix(vec3 axis, float angle) {
-                axis     = normalize(axis);
-                float s  = sin(angle);
-                float c  = cos(angle);
-                float oc = 1.0 - c;
-                
-                return mat3(oc * axis.x * axis.x + c,           oc * axis.x * axis.y - axis.z * s,  oc * axis.z * axis.x + axis.y * s,
-                            oc * axis.x * axis.y + axis.z * s,  oc * axis.y * axis.y + c,           oc * axis.y * axis.z - axis.x * s,
-                            oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c         );
-            }
-
-            mat3 extractRotation(vec3[4] tet1, vec3[4] tet2) {
-                mat3 R = mat3(1.0);
-                for (int iter = 0; iter < 2; iter++) { // Increase this to reduce rotational damping
-                    vec3 X = tet1[1] * R;
-                    vec3 Y = tet1[2] * R;
-                    vec3 Z = tet1[3] * R;
-
-                    vec3 omega =  (cross(X, tet2[1]) +
-                                   cross(Y, tet2[2]) +
-                                   cross(Z, tet2[3])) *
-                          (1.0 / abs(dot(X, tet2[1]) +
-                                     dot(Y, tet2[2]) +
-                                     dot(Z, tet2[3]) + 0.00001));
-
-                    float w = length(omega);
-                    if (w < 0.00001) { break; }
-                    R = R*rotationMatrix(omega / w, w);
-                    //R = rotationMatrix(omega / w, w)*R;
+            // Begin Polar Decomposition Routine ---------------------------------------------------
+            mat3 TransposeMult(vec3[4] tet1, vec3[4] tet2) {
+                mat3 covariance = mat3(0.0);
+                for (int k = 0; k < 4; k++) { //k is the column in this matrix
+                    vec3 left  = tet1[k]; vec3 right = tet2[k];
+                    covariance[0][0] += left[0] * right[0];
+                    covariance[1][0] += left[1] * right[0];
+                    covariance[2][0] += left[2] * right[0];
+                    covariance[0][1] += left[0] * right[1];
+                    covariance[1][1] += left[1] * right[1];
+                    covariance[2][1] += left[2] * right[1];
+                    covariance[0][2] += left[0] * right[2];
+                    covariance[1][2] += left[1] * right[2];
+                    covariance[2][2] += left[2] * right[2];
                 }
-                return R;
+                return covariance;
             }
+            vec4 RotationToQuaternion(vec3 axis, float angle) {
+                float half_angle = angle * 0.5; //angle * halfpi / 180.0;
+                vec2 s = sin(vec2(half_angle, half_angle + 1.57));
+                return vec4(axis * s.x, s.y);
+            }
+            vec3 Rotate(vec3 pos, vec4 quat) {
+                return pos + 2.0 * cross(quat.xyz, cross(quat.xyz, pos) + quat.w * pos);
+            }
+            vec4 quat_mult(vec4 q1, vec4 q2) { 
+                vec4 qr;
+                qr.x = (q1.w * q2.x) + (q1.x * q2.w) + (q1.y * q2.z) - (q1.z * q2.y);
+                qr.y = (q1.w * q2.y) - (q1.x * q2.z) + (q1.y * q2.w) + (q1.z * q2.x);
+                qr.z = (q1.w * q2.z) + (q1.x * q2.y) - (q1.y * q2.x) + (q1.z * q2.w);
+                qr.w = (q1.w * q2.w) - (q1.x * q2.x) - (q1.y * q2.y) - (q1.z * q2.z);
+                return qr;
+            }
+            vec4 extractRotation(mat3 A) {
+                vec4 q = vec4(0.0, 0.0, 0.0, 1.0);
+                for (int iter = 0; iter < 9; iter++) {
+                    vec3 X = Rotate(vec3(1.0, 0.0, 0.0), q);
+                    vec3 Y = Rotate(vec3(0.0, 1.0, 0.0), q);
+                    vec3 Z = Rotate(vec3(0.0, 0.0, 1.0), q);
+
+                    vec3 omega =  (cross(X, A[0]) +
+                                   cross(Y, A[1]) +
+                                   cross(Z, A[2])) *
+                          (1.0 / abs(dot(X, A[0]) +
+                                     dot(Y, A[1]) +
+                                     dot(Z, A[2]) + 0.000000001));
+                    float w = length(omega);
+                    if (w < 0.000000001) { break; }
+                    q = quat_mult(RotationToQuaternion(omega / w, w), q);
+                }
+                return q;
+            }
+            // End Polar Decomposition Routine ---------------------------------------------------
 
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -169,21 +190,21 @@ export class SoftBodyGPU {
                 if(frameNum > 1.0) {
                     // Vert0 Centered Tetrahedrons
                     vec3 id0 = id[0];
-                    id[1] -= id[0];
-                    id[2] -= id[0];
-                    id[3] -= id[0];
-                    id[0]  = vec3(0.0);
+                    id[1] -= curCentroid;
+                    id[2] -= curCentroid;
+                    id[3] -= curCentroid;
+                    id[0] -= curCentroid;
 
-                    outVerts[1] = (lastRestTets[1]);
-                    outVerts[2] = (lastRestTets[2]);
-                    outVerts[3] = (lastRestTets[3]);
-                    outVerts[0] = vec3(0);
+                    outVerts[0] = (lastRestTets[0]) - lastRestCentroid;
+                    outVerts[1] = (lastRestTets[1]) - lastRestCentroid;
+                    outVerts[2] = (lastRestTets[2]) - lastRestCentroid;
+                    outVerts[3] = (lastRestTets[3]) - lastRestCentroid;
 
-                    mat3 rotation = extractRotation(outVerts, id);//extractRotation(TransposeMult(restTets, id));//
-                    outVerts[0] = ((            - lastRestCentroid) * rotation) + curCentroid;
-                    outVerts[1] = ((outVerts[1] - lastRestCentroid) * rotation) + curCentroid;
-                    outVerts[2] = ((outVerts[2] - lastRestCentroid) * rotation) + curCentroid;
-                    outVerts[3] = ((outVerts[3] - lastRestCentroid) * rotation) + curCentroid;
+                    vec4 rotation = extractRotation(TransposeMult(outVerts, id));
+                    outVerts[0] = (Rotate(outVerts[0], rotation)) + curCentroid;
+                    outVerts[1] = (Rotate(outVerts[1], rotation)) + curCentroid;
+                    outVerts[2] = (Rotate(outVerts[2], rotation)) + curCentroid;
+                    outVerts[3] = (Rotate(outVerts[3], rotation)) + curCentroid;
 
                 } else {
                     outVerts[0] = id[0];
@@ -583,24 +604,24 @@ export class SoftBodyGPU {
     }
 
     updateVisMesh() {
-        //const positions = this.visMesh.geometry.attributes.position.array;
-        //const tetpositions = this.edgeMesh.geometry.attributes.position.array;
-        //let nr = 0;
-        //for (let i = 0; i < this.numVisVerts; i++) {
-        //    let tetNr = this.visVerts[nr++] * 4;
-        //    let b0 = this.visVerts[nr++];
-        //    let b1 = this.visVerts[nr++];
-        //    let b2 = this.visVerts[nr++];
-        //    let b3 = 1.0 - b0 - b1 - b2;
-        //    this.vecSetZero(positions, i);
-        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b0);
-        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b1);
-        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
-        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
-        //}
-        //this.visMesh.geometry.computeVertexNormals();
-        //this.visMesh.geometry.attributes.position.needsUpdate = true;
-        //this.visMesh.geometry.computeBoundingSphere();
+        const positions = this.visMesh.geometry.attributes.position.array;
+        const tetpositions = this.edgeMesh.geometry.attributes.position.array;
+        let nr = 0;
+        for (let i = 0; i < this.numVisVerts; i++) {
+            let tetNr = this.visVerts[nr++] * 4;
+            let b0 = this.visVerts[nr++];
+            let b1 = this.visVerts[nr++];
+            let b2 = this.visVerts[nr++];
+            let b3 = 1.0 - b0 - b1 - b2;
+            this.vecSetZero(positions, i);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b0);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b1);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
+            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
+        }
+        this.visMesh.geometry.computeVertexNormals();
+        this.visMesh.geometry.attributes.position.needsUpdate = true;
+        this.visMesh.geometry.computeBoundingSphere();
     }
 
     startGrab(pos) {
