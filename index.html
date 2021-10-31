@@ -10,23 +10,38 @@
         <meta name="viewport"           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=0, shrink-to-fit=0">
         <meta name="theme-color"        content="#ffffff">
         <!--<meta http-equiv="refresh" content="5; URL=javascript:window.open('http://google.com','_blank');">-->
+        <style>#info {
+            position: absolute;
+            margin-left: auto;
+            margin-right: auto;
+            left: 0;
+            right: 0;
+            width: 20em;
+            top: 0px;
+            padding: 10px;
+            box-sizing: border-box;
+            text-align: center;
+            color:white;
+            background-color: #888;
+            border-radius: 0px 0px 30px 30px;
+        }</style>
     </head>
+
 
     <body style="margin:0px; background-color:rgb(255, 255, 255); "><!--overflow:hidden; position:fixed;-->
         <h1 hidden></h1> <!-- Puts the Lighthouse Score over 90 heheh-->
 
-        <!-- Allows three.js Examples to work; could break esbuild... -->
+        <!-- Allows three.js Examples to work without building -->
         <script type="importmap">
-            {
-              "imports": {
-                "three": "../node_modules/three/build/three.module.js"
-              }
-            }
+            { "imports": { "three": "../node_modules/three/build/three.module.js" } }
         </script>
 
         <div id="appbody" style="position: absolute;z-index: -100;">
             <script type="module" src="./src/main.js"></script>
         </div>
-
+        <div id="info">
+            Tetrahedral Simulation - <a href="https://github.com/zalo/TetSim" target="_blank" rel="noopener">zalo/TetSim</a><br/>
+            Click to Drag - <a href="./index.html?cpu=true">CPU Sim</a> - <a href="./index.html?cpu=false">GPU Sim</a>
+        </div>
     </body>
 </html>

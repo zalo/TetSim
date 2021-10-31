@@ -14,6 +14,8 @@ export class SoftBodyGPU {
         this.tetPositionsArray  = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
         this.elemPositionsArray = new Float32Array(this.texDim * this.texDim * 4); // Used for GPU Readback
         this.inputPos           = vertices.slice(0);
+        this.grabPos            = new Float32Array(3);
+        this.grabId             = -1;
 
         // Initialize the General Purpose GPU Computation Renderer
         this.gpuCompute = new MultiTargetGPUComputationRenderer(this.texDim, this.texDim, this.renderer)
@@ -23,9 +25,9 @@ export class SoftBodyGPU {
         this.vel0                  = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
         this.invMass               = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
         this.invRestVolumeAndColor = this.gpuCompute.createTexture(); // Inverse Volume and Graph Color Per Element
-        this.invRestPoseX          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.invRestPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.invRestPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.restingPoseX          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.restingPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
+        this.restingPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.elemToParticlesTable  = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
         this.particleToElemVertsTable = [this.gpuCompute.createTexture(), // Maps from vertices back to the elems gbuffer for the scatter step
                                      this.gpuCompute.createTexture(), // There is more than one because a particle may have a bunch of elems sharing it
@@ -75,16 +77,11 @@ export class SoftBodyGPU {
         this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
         this.xpbdIntegratePass.material.needsUpdate = true;
 
-        // Steps 3 and 4 are going to be the toughest
-        // Need to take special care when precomputing 
-        // ElemToParticlesTable, particleToElemVertsTable, InvMassAndInvRestVolume, and InvRestPose[3]
-        // Ensure the Uniforms are set (Grab Point, Collision Domain, Gravity, Compliance, etc.)
-
         // 3. Gather into the Elements and Enforce Element Shape Constraint
         this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos, this.elems], `
             uniform float dt;
             uniform sampler2D elemToParticlesTable, invRestVolume,
-                    invRestPoseX, invRestPoseY, invRestPoseZ, invMassTex;
+                    restingPoseX, restingPoseY, restingPoseZ, invMassTex;
             vec3[4] g, id, restTets, lastRestTets, outVerts;
             float[4] invMass;
 
@@ -154,40 +151,45 @@ export class SoftBodyGPU {
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
-                float invVolume  = texture2D( invRestVolume, uv ).x;
-                mat3 invRestPose = (mat3(
-                    texture2D( invRestPoseX, uv).xyz,
-                    texture2D( invRestPoseY, uv).xyz,
-                    texture2D( invRestPoseZ, uv).xyz));
+                float invVolume  = 1.0/texture2D( invRestVolume, uv ).x;
+                mat3 restingPose = (mat3(
+                    texture2D( restingPoseX, uv).xyz,
+                    texture2D( restingPoseY, uv).xyz,
+                    texture2D( restingPoseZ, uv).xyz));
 
-                // Gather this tetrahedron's 4 vertices
+                // Gather this tetrahedron's 4 vertex positions
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
                 id[0] = texture2D( texturePos, uvFromIndex(int(tetIndices.x))).xyz;
                 id[1] = texture2D( texturePos, uvFromIndex(int(tetIndices.y))).xyz;
                 id[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
                 id[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
 
+                // The Reference Rest Pose Positions (the the last output of this texture)
+                // These are the same as restPose, but they're already pre-rotated to a good
+                // approximation of the current pose
                 lastRestTets[0] = texture2D( textureElem[0], uv ).xyz;
                 lastRestTets[1] = texture2D( textureElem[1], uv ).xyz - lastRestTets[0];
                 lastRestTets[2] = texture2D( textureElem[2], uv ).xyz - lastRestTets[0];
                 lastRestTets[3] = texture2D( textureElem[3], uv ).xyz - lastRestTets[0];
                 lastRestTets[0] = vec3(0.0);
 
-                float frameNum = texture2D( textureElem[0], uv ).w;
+                // Unused: The inverse mass of each vertex; I'm weighting positional
+                // updates by the the inverse volume instead because it looks better(?)
+                //invMass[0] = texture2D( invMassTex, uvFromIndex(int(tetIndices.x))).x;
+                //invMass[1] = texture2D( invMassTex, uvFromIndex(int(tetIndices.y))).x;
+                //invMass[2] = texture2D( invMassTex, uvFromIndex(int(tetIndices.z))).x;
+                //invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
 
-                invMass[0] = texture2D( invMassTex, uvFromIndex(int(tetIndices.x))).x;
-                invMass[1] = texture2D( invMassTex, uvFromIndex(int(tetIndices.y))).x;
-                invMass[2] = texture2D( invMassTex, uvFromIndex(int(tetIndices.z))).x;
-                invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
-
-                // Polar Decomposition based Simulation
-                // Looks funny because each tet has the same mass despite being different sizes
-                mat3 restPose         = inverse(invRestPose);
+                // Get the default vert0 centered resting pose and the centroids
+                mat3 restPose         = restingPose;
                 vec3 curCentroid      = (id[0]       +       id[1] +       id[2] + id[3]) * 0.25;
                 vec3 restCentroid     = (restPose[0] + restPose[1] + restPose[2]        ) * 0.25;
                 vec3 lastRestCentroid = (lastRestTets[0] + lastRestTets[1] + lastRestTets[2] + lastRestTets[3]) * 0.25;
 
-                if(frameNum > 1.0) {
+                // Initialize using RestPose if this is the first frame
+                // Otherwise, use the pre-rotated output of the prior frame
+                float hasBeenWrittenTo = texture2D( textureElem[0], uv ).w;
+                if(hasBeenWrittenTo > 0.0) {
                     // Vert0 Centered Tetrahedrons
                     vec3 id0 = id[0];
                     id[1] -= curCentroid;
@@ -201,11 +203,10 @@ export class SoftBodyGPU {
                     outVerts[3] = (lastRestTets[3]) - lastRestCentroid;
 
                     vec4 rotation = extractRotation(TransposeMult(outVerts, id));
-                    outVerts[0] = (Rotate(outVerts[0], rotation)) + curCentroid;
-                    outVerts[1] = (Rotate(outVerts[1], rotation)) + curCentroid;
-                    outVerts[2] = (Rotate(outVerts[2], rotation)) + curCentroid;
-                    outVerts[3] = (Rotate(outVerts[3], rotation)) + curCentroid;
-
+                    outVerts[0] = ((Rotate(outVerts[0], rotation)) + curCentroid);
+                    outVerts[1] = ((Rotate(outVerts[1], rotation)) + curCentroid);
+                    outVerts[2] = ((Rotate(outVerts[2], rotation)) + curCentroid);
+                    outVerts[3] = ((Rotate(outVerts[3], rotation)) + curCentroid);
                 } else {
                     outVerts[0] = id[0];
                     outVerts[1] = id[1];
@@ -214,18 +215,18 @@ export class SoftBodyGPU {
                 }
 
                 // Write out the new positions
-                vert1 = vec4(outVerts[0], frameNum + 1.0);
-                vert2 = vec4(outVerts[1], 0);
-                vert3 = vec4(outVerts[2], 0);
-                vert4 = vec4(outVerts[3], 0);
+                vert1 = vec4(outVerts[0], invVolume);
+                vert2 = vec4(outVerts[1], invVolume);
+                vert3 = vec4(outVerts[2], invVolume);
+                vert4 = vec4(outVerts[3], invVolume);
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
         this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolumeAndColor };
         this.solveElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
-        this.solveElemPass.material.uniforms['invRestPoseX'        ] = { value: this.invRestPoseX };
-        this.solveElemPass.material.uniforms['invRestPoseY'        ] = { value: this.invRestPoseY };
-        this.solveElemPass.material.uniforms['invRestPoseZ'        ] = { value: this.invRestPoseZ };
+        this.solveElemPass.material.uniforms['restingPoseX'        ] = { value: this.restingPoseX };
+        this.solveElemPass.material.uniforms['restingPoseY'        ] = { value: this.restingPoseY };
+        this.solveElemPass.material.uniforms['restingPoseZ'        ] = { value: this.restingPoseZ };
         this.solveElemPass.material.uniformsNeedUpdate = true;
         this.solveElemPass.material.needsUpdate = true;
 
@@ -253,60 +254,51 @@ export class SoftBodyGPU {
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
+
+            // Need to use if-else blocks because GLSL doesn't support dynamic indexing into sampler2d Arrays
             vec4 textureElemSample(int index, vec2 uv) {
                  vec4 result = texture2D( textureElem[0], uv );
-                 if (index == 1) {
-                     result  = texture2D( textureElem[1], uv );
-                 } else if (index == 2) {
-                     result  = texture2D( textureElem[2], uv );
-                 } else if (index == 3) {
-                     result  = texture2D( textureElem[3], uv );
-                 }
+                        if (index == 1) { result  = texture2D( textureElem[1], uv );
+                 } else if (index == 2) { result  = texture2D( textureElem[2], uv );
+                 } else if (index == 3) { result  = texture2D( textureElem[3], uv ); }
                  return result;
             }
             vec4 particleToElemVertsTableSample(int index, vec2 uv) {
                 vec4 result = texture2D( particleToElemVertsTable[0], uv );
-                if (index == 1) {
-                    result  = texture2D( particleToElemVertsTable[1], uv );
-                } else if (index == 2) {
-                    result  = texture2D( particleToElemVertsTable[2], uv );
-                } else if (index == 3) {
-                    result  = texture2D( particleToElemVertsTable[3], uv );
-                } else if (index == 4) {
-                    result  = texture2D( particleToElemVertsTable[4], uv );
-                } else if (index == 5) {
-                    result  = texture2D( particleToElemVertsTable[5], uv );
-                } else if (index == 6) {
-                    result  = texture2D( particleToElemVertsTable[6], uv );
-                } else if (index == 7) {
-                    result  = texture2D( particleToElemVertsTable[7], uv );
-                } else if (index == 8) {
-                    result  = texture2D( particleToElemVertsTable[8], uv );
-                }
+                       if (index == 1) { result  = texture2D( particleToElemVertsTable[1], uv );
+                } else if (index == 2) { result  = texture2D( particleToElemVertsTable[2], uv );
+                } else if (index == 3) { result  = texture2D( particleToElemVertsTable[3], uv );
+                } else if (index == 4) { result  = texture2D( particleToElemVertsTable[4], uv );
+                } else if (index == 5) { result  = texture2D( particleToElemVertsTable[5], uv );
+                } else if (index == 6) { result  = texture2D( particleToElemVertsTable[6], uv );
+                } else if (index == 7) { result  = texture2D( particleToElemVertsTable[7], uv );
+                } else if (index == 8) { result  = texture2D( particleToElemVertsTable[8], uv ); }
                 return result;
-           }
+            }
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
-
-                vec4 sumVertex = vec4(0.0); int breaker = 0;
+                vec3 pos = texture2D( texturePos, uv ).xyz;
+                vec3 sumVertex = vec3(0.0); int breaker = 0; float sum = 0.0;
                 for(int tableId = 0; tableId < 9; tableId++) {
                     vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
                     for(int component = 0; component < 4; component++) {
                         if(vertIndices[component] >= -0.99) {
                             int elemId = int(vertIndices[component]) / 4;
                             int vertId = int(vertIndices[component]) % 4;
-                            sumVertex += vec4(textureElemSample(vertId, uvFromIndex(elemId) ).xyz, 1.0);
+                            vec4 elemVerts = textureElemSample(vertId, uvFromIndex(elemId));
+                            sumVertex += elemVerts.xyz * elemVerts.w;
+                            sum += elemVerts.w; // Weight by the volume of each contributing element
                         } else { breaker = 1; break; }
                     }
                     if(breaker == 1) { break; }
                 }
-                pc_fragColor = vec4(sumVertex.xyz / sumVertex.w, 0); // Output the average vertex position
+                pc_fragColor = vec4(sumVertex / sum, 0.0); // Output the average vertex position
             }`);
         this.applyElemPass.material.uniforms['particleToElemVertsTable'] = { value: this.particleToElemVertsTable };
         this.applyElemPass.material.uniformsNeedUpdate = true;
         this.applyElemPass.material.needsUpdate = true;
   
-        // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
+        // 5. Enforce Collisions and Grab Forces
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
             out highp vec4 pc_fragColor;
             uniform float dt, friction, grabId;
@@ -315,18 +307,21 @@ export class SoftBodyGPU {
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
                              (index / int(resolution.x))) / (resolution - 1.0); }
+
+            // This isn't quite correct, but it's close enough for now
             int indexFromUV(vec2 uv) {
                 return int(uv.x * (resolution.x-1.0)) +
-                       int((uv.y* resolution.x) * (resolution.y-1.0)); }
+                       int(uv.y * (resolution.x-1.0) * (resolution.y)); }
 
             void main()	{
                 vec2 uv  = gl_FragCoord.xy / resolution.xy;
                 vec3 pos = texture2D( texturePos    , uv ).xyz;
 
-                if(grabId == float(indexFromUV(uv))) { pos = grabPos; }
-
-                pos      = clamp(pos, vec3(-2.5, -1.0, -2.5), vec3(2.5, 10.0, 2.5));
-                // simple friction
+                // Execute a possible Grab
+                if(float(indexFromUV(uv)) == grabId) { pos = grabPos; }
+                // Clamp the Domain
+                pos = clamp(pos, vec3(-2.5, -1.0, -2.5), vec3(2.5, 10.0, 2.5));
+                // Collide with the floor using "simple friction"
                 if(pos.y < 0.0) {
                     pos.y = 0.0;
                     vec3 F = texture2D( texturePrevPos, uv ).xyz - pos;
@@ -336,8 +331,8 @@ export class SoftBodyGPU {
             }`);
         this.collisionPass.material.uniforms['dt'      ] = { value: this.physicsParams.dt };
         this.collisionPass.material.uniforms['friction'] = { value: this.physicsParams.friction };
-        this.collisionPass.material.uniforms['grabId' ] = { value: -1 };
-        this.collisionPass.material.uniforms['grabPos'] = { value: new THREE.Vector3(0,0,0) }
+        this.collisionPass.material.uniforms['grabId'  ] = { value: -1 };
+        this.collisionPass.material.uniforms['grabPos' ] = { value: new THREE.Vector3(0,0,0) }
         this.collisionPass.material.uniformsNeedUpdate = true;
         this.collisionPass.material.needsUpdate = true;
 
@@ -346,7 +341,7 @@ export class SoftBodyGPU {
             out highp vec4 pc_fragColor;
             uniform float dt, gravity;
             void main()	{
-                vec2 uv      = gl_FragCoord.xy / resolution.xy;
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
                 pc_fragColor = vec4((( texture2D( texturePos    , uv ).xyz -
                                        texture2D( texturePrevPos, uv ).xyz) / dt )
                                     + (vec3(0, gravity, 0) * dt ), 0.0 );
@@ -370,15 +365,7 @@ export class SoftBodyGPU {
             world.scene.add(this.labelMesh);
         }
 
-        // TODO: Finish the implementation! ---------------------------------------------------------------------------------------
-
-        this.grabPos = new Float32Array(3);
-        this.grabId  = -1;
-
-        // solve data: define here to avoid memory allocation during solve
-
         // visual edge mesh
-
         this.geometry = new THREE.BufferGeometry();
         this.geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
         this.geometry.setIndex(tetEdgeIds);
@@ -388,7 +375,6 @@ export class SoftBodyGPU {
         this.edgeMesh.visible = true;
 
         // visual embedded mesh
-
         this.visVerts = visVerts;
         this.numVisVerts = visVerts.length / 4;
         this.geometry = new THREE.BufferGeometry();
@@ -430,7 +416,7 @@ export class SoftBodyGPU {
             this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
 
-        this.oldInvRestPose = new Float32Array(9 * this.numElems);
+        this.oldrestingPose = new Float32Array(9 * this.numElems);
         let biggestT = 0;
         for (let i = 0; i < this.numElems; i++) {
             let id0 = this.tetIds[(4 * i)    ];
@@ -464,30 +450,30 @@ export class SoftBodyGPU {
                 }
             }
 
-            this.vecSetDiff(this.oldInvRestPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
-            this.vecSetDiff(this.oldInvRestPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
-            this.vecSetDiff(this.oldInvRestPose, 3 * i + 2, this.inputPos, id3, this.inputPos, id0);
-            let V = this.matGetDeterminant(this.oldInvRestPose, i) / 6.0;
-            this.matSetInverse(this.oldInvRestPose, i);
+            this.vecSetDiff(this.oldrestingPose, 3 * i    , this.inputPos, id1, this.inputPos, id0);
+            this.vecSetDiff(this.oldrestingPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
+            this.vecSetDiff(this.oldrestingPose, 3 * i + 2, this.inputPos, id3, this.inputPos, id0);
+            let V = this.matGetDeterminant(this.oldrestingPose, i) / 6.0;
+            //this.matSetInverse(this.oldrestingPose, i);
 
-            // Copy the oldInvRestPose into invRestPoseX, invRestPoseY, and invRestPoseZ
+            // Copy the oldrestingPose into restingPoseX, restingPoseY, and restingPoseZ
             // TODO: Monitor whether this needs to be transposed
-            this.invRestPoseX.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 0];
-            this.invRestPoseX.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 1];
-            this.invRestPoseX.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 2];
-            this.invRestPoseY.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 3];
-            this.invRestPoseY.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 4];
-            this.invRestPoseY.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 5];
-            this.invRestPoseZ.image.data[(4 * i) + 0] = this.oldInvRestPose[(9 * i) + 6];
-            this.invRestPoseZ.image.data[(4 * i) + 1] = this.oldInvRestPose[(9 * i) + 7];
-            this.invRestPoseZ.image.data[(4 * i) + 2] = this.oldInvRestPose[(9 * i) + 8];
+            this.restingPoseX.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 0];
+            this.restingPoseX.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 1];
+            this.restingPoseX.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 2];
+            this.restingPoseY.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 3];
+            this.restingPoseY.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 4];
+            this.restingPoseY.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 5];
+            this.restingPoseZ.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 6];
+            this.restingPoseZ.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 7];
+            this.restingPoseZ.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 8];
 
             let pm = V / 4.0 * density;
             this.invMass      .image.data[id0 * 4] += pm;
             this.invMass      .image.data[id1 * 4] += pm;
             this.invMass      .image.data[id2 * 4] += pm;
             this.invMass      .image.data[id3 * 4] += pm;
-            this.invRestVolumeAndColor.image.data[(i * 4) + 0] =  1.0 / V; // Set InvMass
+            this.invRestVolumeAndColor.image.data[(i * 4) + 0] = 1.0 / V; // Set InvMass
             this.invRestVolumeAndColor.image.data[(i * 4) + 1] = -1.0;     // Mark Color as Undefined
         }
 
@@ -495,47 +481,15 @@ export class SoftBodyGPU {
             if (this.invMass.image.data[i] != 0.0) { this.invMass.image.data[i] = 1.0 / this.invMass.image.data[i]; }
         }
 
-        // Colors graph with mutually disconnected tetrahedra. 
-        // This keeps the tetrahedra from stepping on eachother while the constraints are being satisfied.
-        //this.colorGraph();
-
         console.log(biggestT);
-        //console.log(this.particleToElemVertsTable[8].image.data);
     }
-
-    // Yikes! 31 Passes!  This is unacceptably high connectivity; I refuse to simulate it this way...
-    //colorGraph() {
-    //    for (let currentGraphColor = 0; currentGraphColor < 100; currentGraphColor++) {
-    //        let vertexAccounting = {}; let numTetsAddedThisPass = 0;
-    //        //for (let i = 0; i < this.numElems; i++) {
-    //        for (let i = this.numElems-1; i >= 0; i--) {
-    //            let id0 = this.tetIds[(4 * i)];
-    //            let id1 = this.tetIds[(4 * i) + 1];
-    //            let id2 = this.tetIds[(4 * i) + 2];
-    //            let id3 = this.tetIds[(4 * i) + 3];
-    //            if (!(id0 in vertexAccounting) &&
-    //                !(id1 in vertexAccounting) &&
-    //                !(id2 in vertexAccounting) &&
-    //                !(id3 in vertexAccounting) &&
-    //                this.invRestVolumeAndColor.image.data[(i * 4) + 1] < 0.0) {
-    //                vertexAccounting[id0] = true;
-    //                vertexAccounting[id1] = true;
-    //                vertexAccounting[id2] = true;
-    //                vertexAccounting[id3] = true;
-    //                this.invRestVolumeAndColor.image.data[(i * 4) + 1] = currentGraphColor;
-    //                numTetsAddedThisPass += 1;
-    //            }
-    //        }
-    //        console.log(currentGraphColor, numTetsAddedThisPass);
-    //        if (numTetsAddedThisPass == 0) { break; }
-    //    }
-    //}
 
     // ----------------- begin solver -----------------------------------------------------                
 
     simulate(dt, physicsParams) {
         physicsParams.dt = dt;
 
+        // First, upload the new shader uniforms to the GPU
         if (this.xpbdIntegratePass) {
             this.xpbdIntegratePass.material.uniforms['dt'] = { value: physicsParams.dt };
             this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
@@ -561,7 +515,6 @@ export class SoftBodyGPU {
             this.xpbdVelocityPass.material.needsUpdate = true;
         }
 
-
         // Run a substep!
         this.gpuCompute.compute();
     }
@@ -573,24 +526,15 @@ export class SoftBodyGPU {
         this.updateVisMesh();
     }
 
-    readIntoBuffer(gpuComputeVariable, buffer) {
-        let target = this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable);
-        if (target.isWebGLMultipleRenderTargets) {
-            // BROKEN BAH
-            this.renderer.readRenderTargetPixels(
-                this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable).texture[0],
-                0, 0, this.texDim, this.texDim, buffer);
-        } else {
-            this.renderer.readRenderTargetPixels(
-                this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable),
-                0, 0, this.texDim, this.texDim, buffer);
-        }
-
+    readToCPU(gpuComputeVariable, buffer) {
+        this.renderer.readRenderTargetPixels(
+            this.gpuCompute.getCurrentRenderTarget(gpuComputeVariable),
+            0, 0, this.texDim, this.texDim, buffer);
     }
 
     updateEdgeMesh() {
         // Read tetrahedron positions back from the GPU
-        this.readIntoBuffer(this.pos, this.tetPositionsArray);
+        this.readToCPU(this.pos, this.tetPositionsArray);
 
         let positionIndex = 0;
         const positions = this.edgeMesh.geometry.attributes.position.array;
@@ -619,7 +563,8 @@ export class SoftBodyGPU {
             this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
             this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
         }
-        this.visMesh.geometry.computeVertexNormals();
+        // This is colossally slow; move to GPU soon...
+        if (this.physicsParams.computeNormals) { this.visMesh.geometry.computeVertexNormals(); }
         this.visMesh.geometry.attributes.position.needsUpdate = true;
         this.visMesh.geometry.computeBoundingSphere();
     }
@@ -676,56 +621,13 @@ export class SoftBodyGPU {
         dst[dnr  ] = (a[anr  ] - b[bnr  ]) * scale;
     }
 
-    vecLengthSquared(a, anr) {
-        anr *= 3;
-        let a0 = a[anr], a1 = a[anr + 1], a2 = a[anr + 2];
-        return a0 * a0 + a1 * a1 + a2 * a2;
-    }
-
     vecDistSquared(a, anr, b, bnr) {
         anr *= 3; bnr *= 3;
         let a0 = a[anr] - b[bnr], a1 = a[anr + 1] - b[bnr + 1], a2 = a[anr + 2] - b[bnr + 2];
         return a0 * a0 + a1 * a1 + a2 * a2;
     }
 
-    /// a = b x c (nr = index)
-    vecSetCross(a, anr, b, bnr, c, cnr) {
-        anr *= 3; bnr *= 3; cnr *= 3;
-        a[anr++] = b[bnr + 1] * c[cnr + 2] - b[bnr + 2] * c[cnr + 1];
-        a[anr++] = b[bnr + 2] * c[cnr + 0] - b[bnr + 0] * c[cnr + 2];
-        a[anr] = b[bnr + 0] * c[cnr + 1] - b[bnr + 1] * c[cnr + 0];
-    }
-
-    vecSetClamped(dst, dnr, a, anr, b, bnr) {
-        dnr *= 3; anr *= 3; bnr *= 3;
-        dst[dnr] = Math.max(a[anr++], Math.min(b[bnr++], dst[dnr++]));
-        dst[dnr] = Math.max(a[anr++], Math.min(b[bnr++], dst[dnr++]));
-        dst[dnr] = Math.max(a[anr++], Math.min(b[bnr++], dst[dnr++]));
-    }
-
     // ----- matrix math ----------------------------------
-
-    matIJ(A, anr, row, col) {
-        return A[9 * anr + 3 * col + row];
-    }
-
-    matSetVecProduct(dst, dnr, A, anr, b, bnr) {
-        bnr *= 3; anr *= 3;
-        let b0 = b[bnr++];
-        let b1 = b[bnr++];
-        let b2 = b[bnr];
-        this.vecSetZero(dst, dnr);
-        this.vecAdd(dst, dnr, A, anr++, b0);
-        this.vecAdd(dst, dnr, A, anr++, b1);
-        this.vecAdd(dst, dnr, A, anr, b2);
-    }
-
-    matSetMatProduct(Dst, dnr, A, anr, B, bnr) {
-        dnr *= 3; bnr *= 3;
-        this.matSetVecProduct(Dst, dnr++, A, anr, B, bnr++);
-        this.matSetVecProduct(Dst, dnr++, A, anr, B, bnr++);
-        this.matSetVecProduct(Dst, dnr++, A, anr, B, bnr++);
-    }
 
     matGetDeterminant(A, anr) {
         anr *= 9;
@@ -735,32 +637,9 @@ export class SoftBodyGPU {
         return a11 * a22 * a33 + a12 * a23 * a31 + a13 * a21 * a32 - a13 * a22 * a31 - a12 * a21 * a33 - a11 * a23 * a32;
     }
 
-    matSetInverse(A, anr) {
-        let det = this.matGetDeterminant(A, anr);
-        if (det == 0.0) {
-            for (let i = 0; i < 9; i++)
-                A[anr + i] = 0.0;
-            return;
-        }
-        let invDet = 1.0 / det;
-        anr *= 9;
-        let a11 = A[anr + 0], a12 = A[anr + 3], a13 = A[anr + 6];
-        let a21 = A[anr + 1], a22 = A[anr + 4], a23 = A[anr + 7];
-        let a31 = A[anr + 2], a32 = A[anr + 5], a33 = A[anr + 8]
-        A[anr + 0] = (a22 * a33 - a23 * a32) * invDet;
-        A[anr + 3] = -(a12 * a33 - a13 * a32) * invDet;
-        A[anr + 6] = (a12 * a23 - a13 * a22) * invDet;
-        A[anr + 1] = -(a21 * a33 - a23 * a31) * invDet;
-        A[anr + 4] = (a11 * a33 - a13 * a31) * invDet;
-        A[anr + 7] = -(a11 * a23 - a13 * a21) * invDet;
-        A[anr + 2] = (a21 * a32 - a22 * a31) * invDet;
-        A[anr + 5] = -(a11 * a32 - a12 * a31) * invDet;
-        A[anr + 8] = (a11 * a22 - a12 * a21) * invDet;
-    }
-
 }
 
-export class Grabber {
+export class GPUGrabber {
     constructor(scene, renderer, camera, container, controls) {
         this.scene = scene;
         this.renderer = renderer;
