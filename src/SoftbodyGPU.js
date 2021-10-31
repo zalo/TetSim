@@ -134,7 +134,7 @@ export class SoftBodyGPU {
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
                 float invVolume  = texture2D( invRestVolume, uv ).x;
-                mat3 invRestPose = /*transpose*/(mat3(
+                mat3 invRestPose = (mat3(
                     texture2D( invRestPoseX, uv).xyz,
                     texture2D( invRestPoseY, uv).xyz,
                     texture2D( invRestPoseZ, uv).xyz));
@@ -259,7 +259,7 @@ export class SoftBodyGPU {
                     result  = texture2D( particleToElemVertsTable[6], uv );
                 } else if (index == 7) {
                     result  = texture2D( particleToElemVertsTable[7], uv );
-                } else if (index == 7) {
+                } else if (index == 8) {
                     result  = texture2D( particleToElemVertsTable[8], uv );
                 }
                 return result;
@@ -267,23 +267,24 @@ export class SoftBodyGPU {
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-                vec4 sumVertex = vec4(0.0);
-                for(int tableId = 0; tableId < 8; tableId++) {
+                vec4 sumVertex = vec4(0.0); int breaker = 0;
+                for(int tableId = 0; tableId < 9; tableId++) {
                     vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
                     for(int component = 0; component < 4; component++) {
-                        if(vertIndices[component] > 0.0) {
-                            int   elemId = int(vertIndices[component]) / 4;
-                            int   vertId = int(vertIndices[component]) % 4;
-                            sumVertex   += vec4(textureElemSample(vertId, uvFromIndex(elemId) ).xyz, 1.0);
-                        } else { break; }
+                        if(vertIndices[component] >= -0.99) {
+                            int elemId = int(vertIndices[component]) / 4;
+                            int vertId = int(vertIndices[component]) % 4;
+                            sumVertex += vec4(textureElemSample(vertId, uvFromIndex(elemId) ).xyz, 1.0);
+                        } else { breaker = 1; break; }
                     }
+                    if(breaker == 1) { break; }
                 }
-                pc_fragColor = vec4((sumVertex / sumVertex.w).xyz, 0); // Output the average vertex position
+                pc_fragColor = vec4(sumVertex.xyz / sumVertex.w, 0); // Output the average vertex position
             }`);
         this.applyElemPass.material.uniforms['particleToElemVertsTable'] = { value: this.particleToElemVertsTable };
         this.applyElemPass.material.uniformsNeedUpdate = true;
         this.applyElemPass.material.needsUpdate = true;
-
+  
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
             out highp vec4 pc_fragColor;
@@ -327,7 +328,7 @@ export class SoftBodyGPU {
         // Show debug texture
         if (!this.labelMesh) {
             this.labelMaterial = new THREE.MeshBasicMaterial(
-                { map: this.gpuCompute.getCurrentRenderTarget(this.debugElem4).texture, side: THREE.DoubleSide });
+                { map: this.gpuCompute.getCurrentRenderTarget(this.debugElem1).texture, side: THREE.DoubleSide });
             this.labelPlane = new THREE.PlaneGeometry(1, 1);
             this.labelMesh = new THREE.Mesh(this.labelPlane, this.labelMaterial);
             this.labelMesh.position.set(0, 2.5, 0);
@@ -390,7 +391,7 @@ export class SoftBodyGPU {
         let posIndex = 0;
         for (let i = 0; i < this.pos0.image.data.length; i += 4){
             this.pos0.image.data[i  ] = this.inputPos[posIndex++];
-            this.pos0.image.data[i+1] = this.inputPos[posIndex++] -0.35;
+            this.pos0.image.data[i+1] = this.inputPos[posIndex++];
             this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
 
@@ -420,7 +421,7 @@ export class SoftBodyGPU {
                         if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] <= 0.0) {
                             this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0 * i) + id;
                             biggestT = Math.max(biggestT, t);
-                            if (t == 8) { console.log((4 * ids[id]) + c);}
+                            //if (t == 7) { console.log(ids[id], (4 * ids[id]) + c);}
                             assigned = true; break;
                         }
                     }
@@ -464,7 +465,7 @@ export class SoftBodyGPU {
         //this.colorGraph();
 
         console.log(biggestT);
-        console.log(this.particleToElemVertsTable[8].image.data);
+        //console.log(this.particleToElemVertsTable[8].image.data);
     }
 
     // Yikes! 31 Passes!  This is unacceptably high connectivity; I refuse to simulate it this way...
