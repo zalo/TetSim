@@ -400,7 +400,26 @@ class MultiTargetGPUComputationRenderer {
 
             passThruUniforms.passThruTexture.value = input;
 
-            this.doRenderTarget(passThruShader, output);
+            if (output.isWebGLMultipleRenderTargets) {
+                createShaderMaterial(`
+                layout(location = 0) out highp vec4 tex0;
+                layout(location = 1) out highp vec4 tex1;
+                layout(location = 2) out highp vec4 tex2;
+                layout(location = 3) out highp vec4 tex3;
+                uniform sampler2D passThruTexture;
+                    void main() {
+                        vec2 uv = gl_FragCoord.xy / resolution.xy;
+                        vec4 initialValue = texture2D( passThruTexture, uv );
+                        tex0 = initialValue;
+                        tex1 = initialValue;
+                        tex2 = initialValue;
+                        tex3 = initialValue;
+                    }`, passThruUniforms)
+
+            } else {
+                this.doRenderTarget(passThruShader, output);
+            }
+            
 
             passThruUniforms.passThruTexture.value = null;
 
