@@ -288,10 +288,22 @@ export class SoftBodyGPU {
         // 5. Enforce Collisions (TODO: Also Apply Grab Forces via Uniforms here)
         this.collisionPass = this.gpuCompute.addPass(this.pos, [this.pos, this.prevPos],  `
             out highp vec4 pc_fragColor;
-            uniform float dt, friction;
+            uniform float dt, friction, grabId;
+            uniform vec3 grabPos;
+
+            vec2 uvFromIndex(int index) {
+                return vec2(  index % int(resolution.x),
+                             (index / int(resolution.x))) / (resolution - 1.0); }
+            int indexFromUV(vec2 uv) {
+                return int(uv.x * (resolution.x-1.0)) +
+                       int((uv.y* resolution.x) * (resolution.y-1.0)); }
+
             void main()	{
                 vec2 uv  = gl_FragCoord.xy / resolution.xy;
                 vec3 pos = texture2D( texturePos    , uv ).xyz;
+
+                if(grabId == float(indexFromUV(uv))) { pos = grabPos; }
+
                 pos      = clamp(pos, vec3(-2.5, -1.0, -2.5), vec3(2.5, 10.0, 2.5));
                 // simple friction
                 if(pos.y < 0.0) {
@@ -303,6 +315,8 @@ export class SoftBodyGPU {
             }`);
         this.collisionPass.material.uniforms['dt'      ] = { value: this.physicsParams.dt };
         this.collisionPass.material.uniforms['friction'] = { value: this.physicsParams.friction };
+        this.collisionPass.material.uniforms['grabId' ] = { value: -1 };
+        this.collisionPass.material.uniforms['grabPos'] = { value: new THREE.Vector3(0,0,0) }
         this.collisionPass.material.uniformsNeedUpdate = true;
         this.collisionPass.material.needsUpdate = true;
 
@@ -516,6 +530,9 @@ export class SoftBodyGPU {
         this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
         this.xpbdVelocityPass.material.needsUpdate = true;
 
+        this.collisionPass.material.uniforms['grabId' ] = { value: this.grabId };
+        this.collisionPass.material.uniforms['grabPos'] = { value: new THREE.Vector3(this.grabPos[0], this.grabPos[1], this.grabPos[2]) };
+
         // Run a substep!
         this.gpuCompute.compute();
     }
@@ -578,26 +595,27 @@ export class SoftBodyGPU {
         this.visMesh.geometry.computeBoundingSphere();
     }
 
-    //startGrab(pos) {
-    //    let p = [pos.x, pos.y, pos.z];
-    //    let minD2 = Number.MAX_VALUE;
-    //    this.grabId = -1;
-    //    for (let i = 0; i < this.numParticles; i++) {
-    //        let d2 = this.vecDistSquared(p, 0, this.pos, i);
-    //        if (d2 < minD2) {
-    //            minD2 = d2;
-    //            this.grabId = i;
-    //        }
-    //    }
-    //    this.vecCopy(this.grabPos, 0, p, 0);
-    //}
+    startGrab(pos) {
+        let p = [pos.x, pos.y, pos.z];
+        let minD2 = Number.MAX_VALUE;
+        this.grabId = -1;
+        let particles = this.edgeMesh.geometry.attributes.position.array;
+        for (let i = 0; i < this.numParticles; i++) {
+            let d2 = this.vecDistSquared(p, 0, particles, i);
+            if (d2 < minD2) {
+                minD2 = d2;
+                this.grabId = i;
+            }
+        }
+        this.vecCopy(this.grabPos, 0, p, 0);
+    }
 
-    //moveGrabbed(pos) {
-    //    let p = [pos.x, pos.y, pos.z];
-    //    this.vecCopy(this.grabPos, 0, p, 0);
-    //}
+    moveGrabbed(pos) {
+        let p = [pos.x, pos.y, pos.z];
+        this.vecCopy(this.grabPos, 0, p, 0);
+    }
 
-    //endGrab() { this.grabId = -1; }
+    endGrab() { this.grabId = -1; }
 
     // ----- vector math -------------------------------------------------------------
 
@@ -713,80 +731,82 @@ export class SoftBodyGPU {
 
 }
 
-//export class Grabber {
-//    constructor(scene, renderer, camera, container, controls) {
-//        this.scene = scene;
-//        this.renderer = renderer;
-//        this.camera = camera;
-//        this.mousePos = new THREE.Vector2();
-//        this.raycaster = new THREE.Raycaster();
-//        this.raycaster.layers.set(1);
-//        //					this.raycaster.params.Mesh.threshold = 3;
-//        this.raycaster.params.Line.threshold = 0.1;
-//        this.grabDistance = 0.0;
-//        this.active = false;
-//        this.physicsObject = null;
-//        this.controls = controls;
-//
-//        container.addEventListener( 'pointerdown', this.onPointer.bind(this), false );
-//        container.addEventListener( 'pointermove', this.onPointer.bind(this), false );
-//        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), false );
-//        container.addEventListener( 'pointerout' , this.onPointer.bind(this), false );
-//    }
-//    updateRaycaster(x, y) {
-//        var rect = this.renderer.domElement.getBoundingClientRect();
-//        this.mousePos.x = ((x - rect.left) / rect.width) * 2 - 1;
-//        this.mousePos.y = -((y - rect.top) / rect.height) * 2 + 1;
-//        this.raycaster.setFromCamera(this.mousePos, this.camera);
-//    }
-//    start(x, y) {
-//        this.physicsObject = null;
-//        this.updateRaycaster(x, y);
-//        var intersects = this.raycaster.intersectObjects(this.scene.children);
-//        if (intersects.length > 0) {
-//            var obj = intersects[0].object.userData;
-//            if (obj instanceof SoftBody) {
-//                this.physicsObject = obj;
-//                this.grabDistance = intersects[0].distance;
-//                let hit = this.raycaster.ray.origin.clone();
-//                hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
-//                this.physicsObject.startGrab(hit);
-//                this.active = true;
-//                this.controls.enabled = false;
-//            }
-//        }
-//    }
-//    move(x, y) {
-//        if (this.active) {
-//            this.updateRaycaster(x, y);
-//            let hit = this.raycaster.ray.origin.clone();
-//            hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
-//            if (this.physicsObject != null)
-//                this.physicsObject.moveGrabbed(hit);
-//        }
-//    }
-//    end() {
-//        if (this.active) {
-//            if (this.physicsObject != null) {
-//                this.physicsObject.endGrab();
-//                this.physicsObject = null;
-//            }
-//            this.active = false;
-//            this.controls.enabled = true;
-//        }
-//    }
-//
-//    onPointer(evt) {
-//        evt.preventDefault();
-//        if (evt.type == "pointerdown") {
-//            this.start(evt.clientX, evt.clientY);
-//            this.mouseDown = true;
-//        } else if (evt.type == "pointermove" && this.mouseDown) {
-//            if (this.active)
-//                this.move(evt.clientX, evt.clientY);
-//        } else if (evt.type == "pointerup" || evt.type == "pointerout") {
-//            this.end();
-//            this.mouseDown = false;
-//        }
-//    }
-//}
+export class Grabber {
+    constructor(scene, renderer, camera, container, controls) {
+        this.scene = scene;
+        this.renderer = renderer;
+        this.camera = camera;
+        this.mousePos = new THREE.Vector2();
+        this.raycaster = new THREE.Raycaster();
+        this.raycaster.layers.set(1);
+        //					this.raycaster.params.Mesh.threshold = 3;
+        this.raycaster.params.Line.threshold = 0.1;
+        this.grabDistance = 0.0;
+        this.active = false;
+        this.physicsObject = null;
+        this.controls = controls;
+
+        container.addEventListener( 'pointerdown', this.onPointer.bind(this), true );
+        container.addEventListener( 'pointermove', this.onPointer.bind(this), true );
+        container.addEventListener( 'pointerup'  , this.onPointer.bind(this), true );
+        container.addEventListener( 'pointerout' , this.onPointer.bind(this), true );
+    }
+    updateRaycaster(x, y) {
+        var rect = this.renderer.domElement.getBoundingClientRect();
+        this.mousePos.x = ((x - rect.left) / rect.width) * 2 - 1;
+        this.mousePos.y = -((y - rect.top) / rect.height) * 2 + 1;
+        this.raycaster.setFromCamera(this.mousePos, this.camera);
+    }
+    start(x, y) {
+        this.physicsObject = null;
+        this.updateRaycaster(x, y);
+        var intersects = this.raycaster.intersectObjects(this.scene.children);
+        if (intersects.length > 0) {
+            var obj = intersects[0].object.userData;
+            if (obj instanceof SoftBodyGPU) {
+                this.physicsObject = obj;
+                this.grabDistance = intersects[0].distance;
+                let hit = this.raycaster.ray.origin.clone();
+                hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
+                this.physicsObject.startGrab(hit);
+                this.active = true;
+                this.controls.enabled = false;
+            }
+        }
+    }
+    move(x, y) {
+        if (this.active) {
+            this.updateRaycaster(x, y);
+            let hit = this.raycaster.ray.origin.clone();
+            hit.addScaledVector(this.raycaster.ray.direction, this.grabDistance);
+            if (this.physicsObject != null)
+                this.physicsObject.moveGrabbed(hit);
+        }
+    }
+    end(evt) {
+        if (this.active) {
+            if (this.physicsObject != null) {
+                this.physicsObject.endGrab();
+                this.physicsObject = null;
+            }
+            this.active = false;
+            this.controls.enabled = true;
+            //this.controls.onPointerUp(evt);
+        }
+    }
+
+    onPointer(evt) {
+        //evt.preventDefault();
+        if (evt.type == "pointerdown") {
+            this.start(evt.clientX, evt.clientY);
+            this.mouseDown = true;
+        } else if (evt.type == "pointermove" && this.mouseDown) {
+            if (this.active)
+                this.move(evt.clientX, evt.clientY);
+        } else if (evt.type == "pointerup" /*|| evt.type == "pointerout"*/) {
+            this.controls.enabled = true;
+            this.end(evt);
+            this.mouseDown = false;
+        }
+    }
+}
