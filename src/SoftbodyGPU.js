@@ -120,10 +120,10 @@ export class SoftBodyGPU {
                                    cross(Z, tet2[3])) *
                           (1.0 / abs(dot(X, tet2[1]) +
                                      dot(Y, tet2[2]) +
-                                     dot(Z, tet2[3]) + 0.000000001));
+                                     dot(Z, tet2[3]) + 0.00001));
 
                     float w = length(omega);
-                    //if (w < 0.000000001) { break; }
+                    if (w < 0.00001) { break; }
                     R = R*rotationMatrix(omega / w, w);
                     //R = rotationMatrix(omega / w, w)*R;
                 }
@@ -363,7 +363,7 @@ export class SoftBodyGPU {
         this.geometry.setIndex(tetEdgeIds);
         this.edgeMesh = new THREE.LineSegments(this.geometry);
         this.edgeMesh.userData = this;    // for raycasting
-        //                    this.edgeMesh.layers.enable(1);
+        this.edgeMesh.layers.enable(1);
         this.edgeMesh.visible = true;
 
         // visual embedded mesh
@@ -515,23 +515,31 @@ export class SoftBodyGPU {
     simulate(dt, physicsParams) {
         physicsParams.dt = dt;
 
-        this.xpbdIntegratePass.material.uniforms['dt'] = { value: physicsParams.dt };
-        this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
-        this.xpbdIntegratePass.material.needsUpdate = true;
-        this.solveElemPass.material.uniforms['dt'      ] = { value: physicsParams.dt };
-        this.solveElemPass.material.uniformsNeedUpdate = true;
-        this.solveElemPass.material.needsUpdate = true;
-        this.collisionPass.material.uniforms['dt'      ] = { value: physicsParams.dt };
-        this.collisionPass.material.uniforms['friction'] = { value: physicsParams.friction };
-        this.collisionPass.material.uniformsNeedUpdate = true;
-        this.collisionPass.material.needsUpdate = true;
-        this.xpbdVelocityPass.material.uniforms['dt'     ] = { value: physicsParams.dt };
-        this.xpbdVelocityPass.material.uniforms['gravity'] = { value: physicsParams.gravity };
-        this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
-        this.xpbdVelocityPass.material.needsUpdate = true;
+        if (this.xpbdIntegratePass) {
+            this.xpbdIntegratePass.material.uniforms['dt'] = { value: physicsParams.dt };
+            this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
+            this.xpbdIntegratePass.material.needsUpdate = true;
+        }
+        if (this.solveElemPass) {
+            this.solveElemPass.material.uniforms['dt'] = { value: physicsParams.dt };
+            this.solveElemPass.material.uniformsNeedUpdate = true;
+            this.solveElemPass.material.needsUpdate = true;
+        }
+        if (this.collisionPass) {
+            this.collisionPass.material.uniforms['dt'] = { value: physicsParams.dt };
+            this.collisionPass.material.uniforms['friction'] = { value: physicsParams.friction };
+            this.collisionPass.material.uniforms['grabId' ] = { value: this.grabId };
+            this.collisionPass.material.uniforms['grabPos'] = { value: new THREE.Vector3(this.grabPos[0], this.grabPos[1], this.grabPos[2]) };
+            this.collisionPass.material.uniformsNeedUpdate = true;
+            this.collisionPass.material.needsUpdate = true;
+        }
+        if (this.xpbdVelocityPass) {
+            this.xpbdVelocityPass.material.uniforms['dt'] = { value: physicsParams.dt };
+            this.xpbdVelocityPass.material.uniforms['gravity'] = { value: physicsParams.gravity };
+            this.xpbdVelocityPass.material.uniformsNeedUpdate = true;
+            this.xpbdVelocityPass.material.needsUpdate = true;
+        }
 
-        this.collisionPass.material.uniforms['grabId' ] = { value: this.grabId };
-        this.collisionPass.material.uniforms['grabPos'] = { value: new THREE.Vector3(this.grabPos[0], this.grabPos[1], this.grabPos[2]) };
 
         // Run a substep!
         this.gpuCompute.compute();
@@ -575,24 +583,24 @@ export class SoftBodyGPU {
     }
 
     updateVisMesh() {
-        const positions = this.visMesh.geometry.attributes.position.array;
-        const tetpositions = this.edgeMesh.geometry.attributes.position.array;
-        let nr = 0;
-        for (let i = 0; i < this.numVisVerts; i++) {
-            let tetNr = this.visVerts[nr++] * 4;
-            let b0 = this.visVerts[nr++];
-            let b1 = this.visVerts[nr++];
-            let b2 = this.visVerts[nr++];
-            let b3 = 1.0 - b0 - b1 - b2;
-            this.vecSetZero(positions, i);
-            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b0);
-            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b1);
-            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
-            this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
-        }
-        this.visMesh.geometry.computeVertexNormals();
-        this.visMesh.geometry.attributes.position.needsUpdate = true;
-        this.visMesh.geometry.computeBoundingSphere();
+        //const positions = this.visMesh.geometry.attributes.position.array;
+        //const tetpositions = this.edgeMesh.geometry.attributes.position.array;
+        //let nr = 0;
+        //for (let i = 0; i < this.numVisVerts; i++) {
+        //    let tetNr = this.visVerts[nr++] * 4;
+        //    let b0 = this.visVerts[nr++];
+        //    let b1 = this.visVerts[nr++];
+        //    let b2 = this.visVerts[nr++];
+        //    let b3 = 1.0 - b0 - b1 - b2;
+        //    this.vecSetZero(positions, i);
+        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b0);
+        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b1);
+        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b2);
+        //    this.vecAdd(positions, i, tetpositions, this.tetIds[tetNr++], b3);
+        //}
+        //this.visMesh.geometry.computeVertexNormals();
+        //this.visMesh.geometry.attributes.position.needsUpdate = true;
+        //this.visMesh.geometry.computeBoundingSphere();
     }
 
     startGrab(pos) {
