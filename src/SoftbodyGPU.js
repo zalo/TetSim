@@ -25,9 +25,6 @@ export class SoftBodyGPU {
         this.vel0                  = this.gpuCompute.createTexture(); // Leave as 0s for zero velocity
         this.invMass               = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
         this.invRestVolumeAndColor = this.gpuCompute.createTexture(); // Inverse Volume and Graph Color Per Element
-        this.restingPoseX          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.restingPoseY          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
-        this.restingPoseZ          = this.gpuCompute.createTexture(); // Split the 3x3 restpose into 3 textures
         this.elemToParticlesTable  = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
         this.particleToElemVertsTable = [this.gpuCompute.createTexture(), // Maps from vertices back to the elems gbuffer for the scatter step
                                      this.gpuCompute.createTexture(), // There is more than one because a particle may have a bunch of elems sharing it
@@ -38,22 +35,22 @@ export class SoftBodyGPU {
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture()];
+        this.elems0 =               [this.gpuCompute.createTexture(), // Stores the original vertex positions per tet
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture(),
+                                     this.gpuCompute.createTexture()];
 
         // Fill in the above textures with the appropriate data
         this.tetIds = tetIds;
         this.initPhysics(this.physicsParams.density);
 
         // Allocate the variables that are computed at runtime
-        this.pos     = this.gpuCompute.addVariable("texturePos"    , this.pos0);
-        this.prevPos = this.gpuCompute.addVariable("texturePrevPos", this.pos0);
-        this.vel     = this.gpuCompute.addVariable("textureVel"    , this.vel0);
+        this.pos        = this.gpuCompute.addVariable("texturePos"    , this.pos0);
+        this.prevPos    = this.gpuCompute.addVariable("texturePrevPos", this.pos0);
+        this.vel        = this.gpuCompute.addVariable("textureVel"    , this.vel0);
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
         // (before the gather step where they are accumulated back into pos via the particleToElemVertsTable)
-        this.elems   = this.gpuCompute.addVariable("textureElem"   , this.vel0, 4);
-        this.debugElem1 = this.gpuCompute.addVariable("textureDebug1", this.vel0);
-        this.debugElem2 = this.gpuCompute.addVariable("textureDebug2", this.vel0);
-        this.debugElem3 = this.gpuCompute.addVariable("textureDebug3", this.vel0);
-        this.debugElem4 = this.gpuCompute.addVariable("textureDebug4", this.vel0);
+        this.elems      = this.gpuCompute.addVariable("textureElem"  , this.elems0, 4);
 
         // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
@@ -80,9 +77,8 @@ export class SoftBodyGPU {
         // 3. Gather into the Elements and Enforce Element Shape Constraint
         this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos, this.elems], `
             uniform float dt;
-            uniform sampler2D elemToParticlesTable, invRestVolume,
-                    restingPoseX, restingPoseY, restingPoseZ, invMassTex;
-            vec3[4] g, id, restTets, lastRestTets, outVerts;
+            uniform sampler2D elemToParticlesTable, invRestVolume, invMassTex;
+            vec3[4] currentTets, lastRestTets, restTets;
             float[4] invMass;
 
             layout(location = 0) out vec4 vert1;
@@ -152,26 +148,21 @@ export class SoftBodyGPU {
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
                 float invVolume  = 1.0/texture2D( invRestVolume, uv ).x;
-                mat3 restingPose = (mat3(
-                    texture2D( restingPoseX, uv).xyz,
-                    texture2D( restingPoseY, uv).xyz,
-                    texture2D( restingPoseZ, uv).xyz));
 
                 // Gather this tetrahedron's 4 vertex positions
                 vec4 tetIndices = texture2D( elemToParticlesTable, uv );
-                id[0] = texture2D( texturePos, uvFromIndex(int(tetIndices.x))).xyz;
-                id[1] = texture2D( texturePos, uvFromIndex(int(tetIndices.y))).xyz;
-                id[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
-                id[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
+                currentTets[0] = texture2D( texturePos, uvFromIndex(int(tetIndices.x))).xyz;
+                currentTets[1] = texture2D( texturePos, uvFromIndex(int(tetIndices.y))).xyz;
+                currentTets[2] = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
+                currentTets[3] = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
 
                 // The Reference Rest Pose Positions (the the last output of this texture)
-                // These are the same as restPose, but they're already pre-rotated to a good
-                // approximation of the current pose
+                // These are the same as the resting pose, but they're already pre-rotated
+                // to a good approximation of the current pose
                 lastRestTets[0] = texture2D( textureElem[0], uv ).xyz;
-                lastRestTets[1] = texture2D( textureElem[1], uv ).xyz - lastRestTets[0];
-                lastRestTets[2] = texture2D( textureElem[2], uv ).xyz - lastRestTets[0];
-                lastRestTets[3] = texture2D( textureElem[3], uv ).xyz - lastRestTets[0];
-                lastRestTets[0] = vec3(0.0);
+                lastRestTets[1] = texture2D( textureElem[1], uv ).xyz;
+                lastRestTets[2] = texture2D( textureElem[2], uv ).xyz;
+                lastRestTets[3] = texture2D( textureElem[3], uv ).xyz;
 
                 // Unused: The inverse mass of each vertex; I'm weighting positional
                 // updates by the the inverse volume instead because it looks better(?)
@@ -181,68 +172,40 @@ export class SoftBodyGPU {
                 //invMass[3] = texture2D( invMassTex, uvFromIndex(int(tetIndices.w))).x;
 
                 // Get the default vert0 centered resting pose and the centroids
-                mat3 restPose         = restingPose;
-                vec3 curCentroid      = (id[0]       +       id[1] +       id[2] + id[3]) * 0.25;
-                vec3 restCentroid     = (restPose[0] + restPose[1] + restPose[2]        ) * 0.25;
+                vec3 curCentroid      = ( currentTets[0] +  currentTets[1] +  currentTets[2] +  currentTets[3]) * 0.25;
                 vec3 lastRestCentroid = (lastRestTets[0] + lastRestTets[1] + lastRestTets[2] + lastRestTets[3]) * 0.25;
 
-                // Initialize using RestPose if this is the first frame
-                // Otherwise, use the pre-rotated output of the prior frame
-                float hasBeenWrittenTo = texture2D( textureElem[0], uv ).w;
-                if(hasBeenWrittenTo > 0.0) {
-                    // Vert0 Centered Tetrahedrons
-                    vec3 id0 = id[0];
-                    id[1] -= curCentroid;
-                    id[2] -= curCentroid;
-                    id[3] -= curCentroid;
-                    id[0] -= curCentroid;
+                // Center the Deformed Tetrahedron
+                currentTets[0] -= curCentroid;
+                currentTets[1] -= curCentroid;
+                currentTets[2] -= curCentroid;
+                currentTets[3] -= curCentroid;
 
-                    outVerts[0] = (lastRestTets[0]) - lastRestCentroid;
-                    outVerts[1] = (lastRestTets[1]) - lastRestCentroid;
-                    outVerts[2] = (lastRestTets[2]) - lastRestCentroid;
-                    outVerts[3] = (lastRestTets[3]) - lastRestCentroid;
+                // Center the Undeformed Tetrahedron
+                restTets[0] = lastRestTets[0] - lastRestCentroid;
+                restTets[1] = lastRestTets[1] - lastRestCentroid;
+                restTets[2] = lastRestTets[2] - lastRestCentroid;
+                restTets[3] = lastRestTets[3] - lastRestCentroid;
 
-                    vec4 rotation = extractRotation(TransposeMult(outVerts, id));
-                    outVerts[0] = ((Rotate(outVerts[0], rotation)) + curCentroid);
-                    outVerts[1] = ((Rotate(outVerts[1], rotation)) + curCentroid);
-                    outVerts[2] = ((Rotate(outVerts[2], rotation)) + curCentroid);
-                    outVerts[3] = ((Rotate(outVerts[3], rotation)) + curCentroid);
-                } else {
-                    outVerts[0] = id[0];
-                    outVerts[1] = id[1];
-                    outVerts[2] = id[2];
-                    outVerts[3] = id[3];
-                }
+                // Find the rotational offset between the two and rotate the undeformed tetrahedron by it
+                vec4 rotation = extractRotation(TransposeMult(restTets, currentTets));
+                restTets[0] = ((Rotate(restTets[0], rotation)) + curCentroid);
+                restTets[1] = ((Rotate(restTets[1], rotation)) + curCentroid);
+                restTets[2] = ((Rotate(restTets[2], rotation)) + curCentroid);
+                restTets[3] = ((Rotate(restTets[3], rotation)) + curCentroid);
 
-                // Write out the new positions
-                vert1 = vec4(outVerts[0], invVolume);
-                vert2 = vec4(outVerts[1], invVolume);
-                vert3 = vec4(outVerts[2], invVolume);
-                vert4 = vec4(outVerts[3], invVolume);
+                // Write out the undeformed tetrahedron
+                vert1 = vec4(restTets[0], invVolume);
+                vert2 = vec4(restTets[1], invVolume);
+                vert3 = vec4(restTets[2], invVolume);
+                vert4 = vec4(restTets[3], invVolume);
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
         this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolumeAndColor };
         this.solveElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
-        this.solveElemPass.material.uniforms['restingPoseX'        ] = { value: this.restingPoseX };
-        this.solveElemPass.material.uniforms['restingPoseY'        ] = { value: this.restingPoseY };
-        this.solveElemPass.material.uniforms['restingPoseZ'        ] = { value: this.restingPoseZ };
         this.solveElemPass.material.uniformsNeedUpdate = true;
         this.solveElemPass.material.needsUpdate = true;
-
-        // Debug: Copy the elems textures into a debug texture for reading from the GPU
-        this.copyElems1Pass = this.gpuCompute.addPass(this.debugElem1, [this.elems], `
-            out highp vec4 pc_fragColor;
-            void main()	{ pc_fragColor = texture2D( textureElem[0], gl_FragCoord.xy / resolution.xy ); }`);
-        this.copyElems2Pass = this.gpuCompute.addPass(this.debugElem2, [this.elems], `
-            out highp vec4 pc_fragColor;
-            void main()	{ pc_fragColor = texture2D( textureElem[1], gl_FragCoord.xy / resolution.xy ); }`);
-        this.copyElems3Pass = this.gpuCompute.addPass(this.debugElem3, [this.elems], `
-            out highp vec4 pc_fragColor;
-            void main()	{ pc_fragColor = texture2D( textureElem[2], gl_FragCoord.xy / resolution.xy ); }`);
-        this.copyElems4Pass = this.gpuCompute.addPass(this.debugElem4, [this.elems], `
-            out highp vec4 pc_fragColor;
-            void main()	{ pc_fragColor = texture2D( textureElem[3], gl_FragCoord.xy / resolution.xy ); }`);
 
         // 4. Gather the particles back from the elements
         this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
@@ -282,7 +245,7 @@ export class SoftBodyGPU {
                 for(int tableId = 0; tableId < 9; tableId++) {
                     vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
                     for(int component = 0; component < 4; component++) {
-                        if(vertIndices[component] >= -0.99) {
+                        if(vertIndices[component] > -1.0) {
                             int elemId = int(vertIndices[component]) / 4;
                             int vertId = int(vertIndices[component]) % 4;
                             vec4 elemVerts = textureElemSample(vertId, uvFromIndex(elemId));
@@ -357,8 +320,8 @@ export class SoftBodyGPU {
 
         // Show debug texture
         if (!this.labelMesh) {
-            this.labelMaterial = new THREE.MeshBasicMaterial(
-                { map: this.gpuCompute.getCurrentRenderTarget(this.debugElem1).texture, side: THREE.DoubleSide });
+            this.labelMaterial = new THREE.MeshBasicMaterial( 
+                { map: this.gpuCompute.getCurrentRenderTarget(this.elems).texture[0], side: THREE.DoubleSide }); //this.gpuCompute.getCurrentRenderTarget(this.debugElem1).texture
             this.labelPlane = new THREE.PlaneGeometry(1, 1);
             this.labelMesh = new THREE.Mesh(this.labelPlane, this.labelMaterial);
             this.labelMesh.position.set(0, 2.5, 0);
@@ -424,6 +387,20 @@ export class SoftBodyGPU {
             let id2 = this.tetIds[(4 * i) + 2];
             let id3 = this.tetIds[(4 * i) + 3];
 
+            // Initialize elems to the resting position of each tet
+            this.elems0[0].image.data[(4 * i)    ] = this.inputPos[(id0 * 3) + 0];
+            this.elems0[0].image.data[(4 * i) + 1] = this.inputPos[(id0 * 3) + 1];
+            this.elems0[0].image.data[(4 * i) + 2] = this.inputPos[(id0 * 3) + 2];
+            this.elems0[1].image.data[(4 * i)    ] = this.inputPos[(id1 * 3) + 0];
+            this.elems0[1].image.data[(4 * i) + 1] = this.inputPos[(id1 * 3) + 1];
+            this.elems0[1].image.data[(4 * i) + 2] = this.inputPos[(id1 * 3) + 2];
+            this.elems0[2].image.data[(4 * i)    ] = this.inputPos[(id2 * 3) + 0];
+            this.elems0[2].image.data[(4 * i) + 1] = this.inputPos[(id2 * 3) + 1];
+            this.elems0[2].image.data[(4 * i) + 2] = this.inputPos[(id2 * 3) + 2];
+            this.elems0[3].image.data[(4 * i)    ] = this.inputPos[(id3 * 3) + 0];
+            this.elems0[3].image.data[(4 * i) + 1] = this.inputPos[(id3 * 3) + 1];
+            this.elems0[3].image.data[(4 * i) + 2] = this.inputPos[(id3 * 3) + 2];
+
             // The forward table
             this.elemToParticlesTable.image.data[(4 * i)    ] = id0;
             this.elemToParticlesTable.image.data[(4 * i) + 1] = id1;
@@ -454,19 +431,6 @@ export class SoftBodyGPU {
             this.vecSetDiff(this.oldrestingPose, 3 * i + 1, this.inputPos, id2, this.inputPos, id0);
             this.vecSetDiff(this.oldrestingPose, 3 * i + 2, this.inputPos, id3, this.inputPos, id0);
             let V = this.matGetDeterminant(this.oldrestingPose, i) / 6.0;
-            //this.matSetInverse(this.oldrestingPose, i);
-
-            // Copy the oldrestingPose into restingPoseX, restingPoseY, and restingPoseZ
-            // TODO: Monitor whether this needs to be transposed
-            this.restingPoseX.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 0];
-            this.restingPoseX.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 1];
-            this.restingPoseX.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 2];
-            this.restingPoseY.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 3];
-            this.restingPoseY.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 4];
-            this.restingPoseY.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 5];
-            this.restingPoseZ.image.data[(4 * i) + 0] = this.oldrestingPose[(9 * i) + 6];
-            this.restingPoseZ.image.data[(4 * i) + 1] = this.oldrestingPose[(9 * i) + 7];
-            this.restingPoseZ.image.data[(4 * i) + 2] = this.oldrestingPose[(9 * i) + 8];
 
             let pm = V / 4.0 * density;
             this.invMass      .image.data[id0 * 4] += pm;

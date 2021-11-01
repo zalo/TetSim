@@ -12,7 +12,7 @@ import {
 	WebGLRenderTarget,
     WebGLMultipleRenderTargets,
     GLSL3
-} from 'three';
+} from '../node_modules/three/build/three.module.js';
 
 /**
  * GPUComputationRenderer, based on SimulationRenderer by zz85
@@ -401,21 +401,29 @@ class MultiTargetGPUComputationRenderer {
             passThruUniforms.passThruTexture.value = input;
 
             if (output.isWebGLMultipleRenderTargets) {
-                createShaderMaterial(`
+
+                passThruUniforms["passThruTexture1"] = {value: input[0]};
+                passThruUniforms["passThruTexture2"] = {value: input[1]};
+                passThruUniforms["passThruTexture3"] = {value: input[2]};
+                passThruUniforms["passThruTexture4"] = {value: input[3]};
+
+                let multiPassthroughShader = createShaderMaterial(`
                 layout(location = 0) out highp vec4 tex0;
                 layout(location = 1) out highp vec4 tex1;
                 layout(location = 2) out highp vec4 tex2;
                 layout(location = 3) out highp vec4 tex3;
-                uniform sampler2D passThruTexture;
-                    void main() {
-                        vec2 uv = gl_FragCoord.xy / resolution.xy;
-                        vec4 initialValue = texture2D( passThruTexture, uv );
-                        tex0 = initialValue;
-                        tex1 = initialValue;
-                        tex2 = initialValue;
-                        tex3 = initialValue;
-                    }`, passThruUniforms)
-
+                uniform sampler2D passThruTexture1;
+                uniform sampler2D passThruTexture2;
+                uniform sampler2D passThruTexture3;
+                uniform sampler2D passThruTexture4;
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / resolution.xy;
+                    tex0 = texture2D( passThruTexture1, uv );
+                    tex1 = texture2D( passThruTexture2, uv );
+                    tex2 = texture2D( passThruTexture3, uv );
+                    tex3 = texture2D( passThruTexture4, uv );
+                }`, passThruUniforms)
+                this.doRenderTarget(multiPassthroughShader, output);
             } else {
                 this.doRenderTarget(passThruShader, output);
             }
