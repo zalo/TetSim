@@ -4,6 +4,6 @@
 	},
 	"dependencies": {
 		"esbuild": "^0.11.20",
-		"three": "^0.133.0"
+		"three": "github:zalo/three.js#fix-webglmultiplerendertargets-add-options"
 	}
 }
