@@ -367,8 +367,18 @@ class MultiTargetGPUComputationRenderer {
                 return renderTarget;
             } else {
 
-                const renderTarget = new WebGLMultipleRenderTargets(sizeXTexture, sizeYTexture, count);
+                const renderTarget = new WebGLMultipleRenderTargets(
+                    sizeXTexture, sizeYTexture, count, {
+                    wrapS: wrapS,
+                    wrapT: wrapT,
+                    minFilter: minFilter,
+                    magFilter: magFilter,
+                    format: RGBAFormat,
+                    type: dataType,
+                    depthBuffer: false
+                });
 
+                // For PC users?
                 for (let i = 0, il = renderTarget.texture.length; i < il; i++) {
                     renderTarget.texture[i].wrapS = wrapS;
                     renderTarget.texture[i].wrapT = wrapT;
@@ -402,26 +412,18 @@ class MultiTargetGPUComputationRenderer {
 
             if (output.isWebGLMultipleRenderTargets) {
 
-                passThruUniforms["passThruTexture1"] = {value: input[0]};
-                passThruUniforms["passThruTexture2"] = {value: input[1]};
-                passThruUniforms["passThruTexture3"] = {value: input[2]};
-                passThruUniforms["passThruTexture4"] = {value: input[3]};
-
                 let multiPassthroughShader = createShaderMaterial(`
                 layout(location = 0) out highp vec4 tex0;
                 layout(location = 1) out highp vec4 tex1;
                 layout(location = 2) out highp vec4 tex2;
                 layout(location = 3) out highp vec4 tex3;
-                uniform sampler2D passThruTexture1;
-                uniform sampler2D passThruTexture2;
-                uniform sampler2D passThruTexture3;
-                uniform sampler2D passThruTexture4;
+                uniform sampler2D[4] passThruTexture;
                 void main() {
                     vec2 uv = gl_FragCoord.xy / resolution.xy;
-                    tex0 = texture2D( passThruTexture1, uv );
-                    tex1 = texture2D( passThruTexture2, uv );
-                    tex2 = texture2D( passThruTexture3, uv );
-                    tex3 = texture2D( passThruTexture4, uv );
+                    tex0 = texture2D( passThruTexture[0], uv );
+                    tex1 = texture2D( passThruTexture[1], uv );
+                    tex2 = texture2D( passThruTexture[2], uv );
+                    tex3 = texture2D( passThruTexture[3], uv );
                 }`, passThruUniforms)
                 this.doRenderTarget(multiPassthroughShader, output);
             } else {

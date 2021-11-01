@@ -189,10 +189,10 @@ export class SoftBodyGPU {
 
                 // Find the rotational offset between the two and rotate the undeformed tetrahedron by it
                 vec4 rotation = extractRotation(TransposeMult(restTets, currentTets));
-                restTets[0] = ((Rotate(restTets[0], rotation)) + curCentroid);
-                restTets[1] = ((Rotate(restTets[1], rotation)) + curCentroid);
-                restTets[2] = ((Rotate(restTets[2], rotation)) + curCentroid);
-                restTets[3] = ((Rotate(restTets[3], rotation)) + curCentroid);
+                restTets[0] = Rotate(restTets[0], rotation) + curCentroid;
+                restTets[1] = Rotate(restTets[1], rotation) + curCentroid;
+                restTets[2] = Rotate(restTets[2], rotation) + curCentroid;
+                restTets[3] = Rotate(restTets[3], rotation) + curCentroid;
 
                 // Write out the undeformed tetrahedron
                 vert1 = vec4(restTets[0], invVolume);
@@ -321,7 +321,7 @@ export class SoftBodyGPU {
         // Show debug texture
         if (!this.labelMesh) {
             this.labelMaterial = new THREE.MeshBasicMaterial( 
-                { map: this.gpuCompute.getCurrentRenderTarget(this.elems).texture[0], side: THREE.DoubleSide }); //this.gpuCompute.getCurrentRenderTarget(this.debugElem1).texture
+                { map: this.gpuCompute.getCurrentRenderTarget(this.elems).texture[0], side: THREE.DoubleSide });
             this.labelPlane = new THREE.PlaneGeometry(1, 1);
             this.labelMesh = new THREE.Mesh(this.labelPlane, this.labelMaterial);
             this.labelMesh.position.set(0, 2.5, 0);
