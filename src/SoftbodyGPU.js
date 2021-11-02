@@ -85,6 +85,7 @@ export class SoftBodyGPU {
             layout(location = 1) out vec4 vert2;
             layout(location = 2) out vec4 vert3;
             layout(location = 3) out vec4 vert4;
+            //layout(location = 4) out vec4 quat;
 
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
@@ -159,10 +160,11 @@ export class SoftBodyGPU {
                 // The Reference Rest Pose Positions (the the last output of this texture)
                 // These are the same as the resting pose, but they're already pre-rotated
                 // to a good approximation of the current pose
-                lastRestTets[0] = texture2D( textureElem[0], uv ).xyz;
-                lastRestTets[1] = texture2D( textureElem[1], uv ).xyz;
-                lastRestTets[2] = texture2D( textureElem[2], uv ).xyz;
-                lastRestTets[3] = texture2D( textureElem[3], uv ).xyz;
+                lastRestTets[0]    = texture2D( textureElem[0], uv ).xyz;
+                lastRestTets[1]    = texture2D( textureElem[1], uv ).xyz;
+                lastRestTets[2]    = texture2D( textureElem[2], uv ).xyz;
+                lastRestTets[3]    = texture2D( textureElem[3], uv ).xyz;
+                //vec4 starting_quat = texture2D( textureElem[4], uv );
 
                 // Unused: The inverse mass of each vertex; I'm weighting positional
                 // updates by the the inverse volume instead because it looks better(?)
@@ -199,6 +201,8 @@ export class SoftBodyGPU {
                 vert2 = vec4(restTets[1], invVolume);
                 vert3 = vec4(restTets[2], invVolume);
                 vert4 = vec4(restTets[3], invVolume);
+                //quat  = quat_mult(rotation, starting_quat); // Keep track of the current Quaternion for normals
+                //quat  = normalize(quat);
             }`);
         this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
         this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
@@ -328,21 +332,72 @@ export class SoftBodyGPU {
             world.scene.add(this.labelMesh);
         }
 
+
         // visual edge mesh
+        this.edgeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+        this.edgeMaterial.onBeforeCompile = (shader) => {
+            // Vertex Shader: Set Vertex Positions to the texture positions
+            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+            shader.vertexShader =
+                 shader.vertexShader.slice(0, bodyStart) +
+                 `uniform sampler2D texturePos;
+                 vec4 getValueByIndexFromTexture(sampler2D tex, int index) {
+                     ivec2 texSize = textureSize(tex, 0);
+                     return texelFetch(tex, ivec2(
+                         index % texSize.x,
+                         index / texSize.x), 0);
+                 }\n` +
+                 shader.vertexShader.slice(bodyStart - 1, - 1) +
+                 `mvPosition = getValueByIndexFromTexture(texturePos, gl_VertexID);
+                 mvPosition = modelViewMatrix * vec4( mvPosition.xyz, 1.0 );
+                 gl_Position = projectionMatrix * mvPosition;
+            }`;
+            
+            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) } //this.pos.texture };
+        };
         this.geometry = new THREE.BufferGeometry();
         this.geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
         this.geometry.setIndex(tetEdgeIds);
-        this.edgeMesh = new THREE.LineSegments(this.geometry);
+        this.edgeMesh = new THREE.LineSegments(this.geometry, this.edgeMaterial);
         this.edgeMesh.userData = this;    // for raycasting
         this.edgeMesh.layers.enable(1);
         this.edgeMesh.visible = true;
 
         // visual embedded mesh
-        this.visVerts = visVerts;
+        visMaterial.onBeforeCompile = (shader) => {
+            // Vertex Shader: Set Vertex Positions to the texture positions
+            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+            shader.vertexShader =
+                'attribute vec4 tetWeights;\n' +
+                 shader.vertexShader.slice(0, bodyStart) +
+                 `uniform sampler2D texturePos, elemToParticlesTable;
+                 vec4 getValueByIndexFromTexture(sampler2D tex, int index) {
+                     ivec2 texSize = textureSize(tex, 0);
+                     return texelFetch(tex, ivec2(
+                         index % texSize.x,
+                         index / texSize.x), 0);
+                 }\n` +
+                 shader.vertexShader.slice(bodyStart - 1, - 1) +
+                 `vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
+                 float lastTetWeight = 1.0 - (tetWeights.y + tetWeights.z + tetWeights.w);
+                 vec4 vertPosition = ((getValueByIndexFromTexture(texturePos, int(vertIndices.x)) * tetWeights.y) + 
+                                      (getValueByIndexFromTexture(texturePos, int(vertIndices.y)) * tetWeights.z) + 
+                                      (getValueByIndexFromTexture(texturePos, int(vertIndices.z)) * tetWeights.w) + 
+                                      (getValueByIndexFromTexture(texturePos, int(vertIndices.w)) * lastTetWeight));
+                 mvPosition = modelViewMatrix * vec4( vertPosition.xyz, 1.0 );
+                 gl_Position = projectionMatrix * mvPosition;
+            }`;
+            
+            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
+        };
+
+        this.visVerts = visVerts; // <- These are barycentric weights inside each tetrahedra
         this.numVisVerts = visVerts.length / 4;
         this.geometry = new THREE.BufferGeometry();
         this.geometry.setAttribute('position', new THREE.BufferAttribute(
             new Float32Array(3 * this.numVisVerts), 3));
+        this.geometry.setAttribute('tetWeights', new THREE.BufferAttribute(this.visVerts, 4));
         this.geometry.setIndex(visTriIds);
         this.visMesh = new THREE.Mesh(this.geometry, visMaterial);
         this.visMesh.castShadow = true;
@@ -400,6 +455,10 @@ export class SoftBodyGPU {
             this.elems0[3].image.data[(4 * i)    ] = this.inputPos[(id3 * 3) + 0];
             this.elems0[3].image.data[(4 * i) + 1] = this.inputPos[(id3 * 3) + 1];
             this.elems0[3].image.data[(4 * i) + 2] = this.inputPos[(id3 * 3) + 2];
+            //this.elems0[4].image.data[(4 * i)    ] = 0.0; // Quaternion
+            //this.elems0[4].image.data[(4 * i) + 1] = 0.0;
+            //this.elems0[4].image.data[(4 * i) + 2] = 0.0;
+            //this.elems0[4].image.data[(4 * i) + 3] = 1.0;
 
             // The forward table
             this.elemToParticlesTable.image.data[(4 * i)    ] = id0;
@@ -438,7 +497,7 @@ export class SoftBodyGPU {
             this.invMass      .image.data[id2 * 4] += pm;
             this.invMass      .image.data[id3 * 4] += pm;
             this.invRestVolumeAndColor.image.data[(i * 4) + 0] = 1.0 / V; // Set InvMass
-            this.invRestVolumeAndColor.image.data[(i * 4) + 1] = -1.0;     // Mark Color as Undefined
+            this.invRestVolumeAndColor.image.data[(i * 4) + 1] = -1.0;    // Mark Color as Undefined
         }
 
         for (let i = 0; i < this.invMass.image.data.length; i++) {
@@ -486,8 +545,8 @@ export class SoftBodyGPU {
     // ----------------- end solver -----------------------------------------------------                
 
     endFrame() {
-        this.updateEdgeMesh();
-        this.updateVisMesh();
+        //this.updateEdgeMesh();
+        //this.updateVisMesh();
     }
 
     readToCPU(gpuComputeVariable, buffer) {
@@ -630,6 +689,13 @@ export class GPUGrabber {
         this.raycaster.setFromCamera(this.mousePos, this.camera);
     }
     start(x, y) {
+        // Reads the Mesh Geometry Back from the GPU
+        for (let child in this.scene.children) {
+            if (this.scene.children[child].userData instanceof SoftBodyGPU) {
+                this.scene.children[child].userData.updateEdgeMesh();
+                this.scene.children[child].userData.endFrame();
+            }
+        }
         this.physicsObject = null;
         this.updateRaycaster(x, y);
         var intersects = this.raycaster.intersectObjects(this.scene.children);
