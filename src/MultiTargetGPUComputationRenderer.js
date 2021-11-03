@@ -247,12 +247,18 @@ class MultiTargetGPUComputationRenderer {
                         } else {
                             uniforms[depVar.name] = { value: [] };
                             material.fragmentShader = '\nuniform sampler2D ' + depVar.name + '[ ' + depVar.count + ' ];\n' + material.fragmentShader;
-                            //let prefix = "";
-                            //for (let t = 0; t < depVar.count; t++) {
-                            //    uniforms[depVar.name+t] = { value: null };
-                            //    prefix += '\nuniform sampler2D ' + (depVar.name + t) + ';\n';
-                            //}
-                            //material.fragmentShader = prefix + material.fragmentShader;
+                        }
+
+                        // Add the previous frame's dependencies as well
+                        // (only if the dependency is not the current variable)
+                        if (depVar.name !== variable.name) {
+                            if (!depVar.count || depVar.count < 2) {
+                                uniforms["prev_"+depVar.name] = { value: null };
+                                material.fragmentShader = '\nuniform sampler2D prev_' + depVar.name + ';\n' + material.fragmentShader;
+                            } else {
+                                uniforms["prev_"+depVar.name] = { value: [] };
+                                material.fragmentShader = '\nuniform sampler2D prev_' + depVar.name + '[ ' + depVar.count + ' ];\n' + material.fragmentShader;
+                            }
                         }
 
                     }
@@ -283,6 +289,10 @@ class MultiTargetGPUComputationRenderer {
                         const depVar = pass.dependencies[d];
 
                         uniforms[depVar.name].value = depVar.renderTargets[depVar.currentTextureIndex].texture;
+
+                        if (depVar.name !== pass.variable.name) {
+                            uniforms["prev_"+depVar.name].value = depVar.renderTargets[depVar.currentTextureIndex === 0 ? 1 : 0].texture;
+                        }
 
                     }
 

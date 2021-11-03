@@ -31,6 +31,7 @@ export default class Main {
             volCompliance : 0.0,
             worldBounds   : [-2.5,-1.0, -2.5, 2.5, 10.0, 2.5],
             computeNormals: true,
+            ShowTetMesh   : false,
             cpuSim        : cpuSim
         };
         this.gui = new GUI();
@@ -38,7 +39,7 @@ export default class Main {
         this.gui.add(this.physicsParams, 'timeScale', 0.1, 2.0, 0.01);
         this.gui.add(this.physicsParams, 'numSubsteps', 1, cpuSim?10:100, 1);
         this.gui.add(this.physicsParams, 'friction', 0.0, 6000.0, 100.0);
-        this.gui.add(this.physicsParams, 'computeNormals');
+        this.gui.add(this.physicsParams, 'ShowTetMesh');
         //this.gui.add(this.physicsParams, 'density', 0.0, 10000.0, 100.0);
         //this.gui.add(this.physicsParams, 'devCompliance', 1.0 / 2000000.0, 1.0 / 1000.0, 0.00001);
         //this.gui.add(this.physicsParams, 'volCompliance', 0.0, 0.001, 0.00001);
