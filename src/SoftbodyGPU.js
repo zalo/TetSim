@@ -35,10 +35,11 @@ export class SoftBodyGPU {
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture()];
-        this.elems0 =               [this.gpuCompute.createTexture(), // Stores the original vertex positions per tet
+        this.elems0               = [this.gpuCompute.createTexture(), // Stores the original vertex positions per tet
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture()];
+        this.quats0                = this.gpuCompute.createTexture();
 
         // Fill in the above textures with the appropriate data
         this.tetIds = tetIds;
@@ -51,8 +52,9 @@ export class SoftBodyGPU {
         // Create a multi target element texture; this temporarily stores the 4 vertex results of solveElem
         // (before the gather step where they are accumulated back into pos via the particleToElemVertsTable)
         this.elems      = this.gpuCompute.addVariable("textureElem"  , this.elems0, 4);
+        this.quats      = this.gpuCompute.addVariable("textureQuat"  , this.quats0);
 
-        // Set up the 6 GPGPU Passes for each substep of the FEM Simulation
+        // Set up the 7 GPGPU Passes for each substep of the FEM Simulation
         // 1. Copy prevPos to Pos 
         this.copyPrevPosPass = this.gpuCompute.addPass(this.prevPos, [this.pos], `
             out highp vec4 pc_fragColor;
@@ -75,17 +77,10 @@ export class SoftBodyGPU {
         this.xpbdIntegratePass.material.needsUpdate = true;
 
         // 3. Gather into the Elements and Enforce Element Shape Constraint
-        this.solveElemPass = this.gpuCompute.addPass(this.elems, [this.pos, this.elems], `
-            uniform float dt;
-            uniform sampler2D elemToParticlesTable, invRestVolume, invMassTex;
-            vec3[4] currentTets, lastRestTets, restTets;
-            float[4] invMass;
-
-            layout(location = 0) out vec4 vert1;
-            layout(location = 1) out vec4 vert2;
-            layout(location = 2) out vec4 vert3;
-            layout(location = 3) out vec4 vert4;
-            //layout(location = 4) out vec4 quat;
+        this.solveElemPass = this.gpuCompute.addPass(this.quats, [this.pos, this.elems, this.quats], `
+            uniform sampler2D elemToParticlesTable;
+            vec3[4] currentTets, lastRestTets;
+            out vec4 quat;
 
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
@@ -124,8 +119,7 @@ export class SoftBodyGPU {
                 qr.w = (q1.w * q2.w) - (q1.x * q2.x) - (q1.y * q2.y) - (q1.z * q2.z);
                 return qr;
             }
-            vec4 extractRotation(mat3 A) {
-                vec4 q = vec4(0.0, 0.0, 0.0, 1.0);
+            vec4 extractRotation(mat3 A, vec4 q) {
                 for (int iter = 0; iter < 9; iter++) {
                     vec3 X = Rotate(vec3(1.0, 0.0, 0.0), q);
                     vec3 Y = Rotate(vec3(0.0, 1.0, 0.0), q);
@@ -148,6 +142,81 @@ export class SoftBodyGPU {
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 // Grab the Relevant Element Variables
+
+                // Gather this tetrahedron's 4 vertex positions
+                vec4 tetIndices = texture2D( elemToParticlesTable, uv );
+                currentTets[0]  = texture2D( texturePos, uvFromIndex(int(tetIndices.x))).xyz;
+                currentTets[1]  = texture2D( texturePos, uvFromIndex(int(tetIndices.y))).xyz;
+                currentTets[2]  = texture2D( texturePos, uvFromIndex(int(tetIndices.z))).xyz;
+                currentTets[3]  = texture2D( texturePos, uvFromIndex(int(tetIndices.w))).xyz;
+
+                // The Reference Rest Pose Positions (the the last output of this texture)
+                // These are the same as the resting pose, but they're already pre-rotated
+                // to a good approximation of the current pose
+                lastRestTets[0] = texture2D( textureElem[0], uv ).xyz;
+                lastRestTets[1] = texture2D( textureElem[1], uv ).xyz;
+                lastRestTets[2] = texture2D( textureElem[2], uv ).xyz;
+                lastRestTets[3] = texture2D( textureElem[3], uv ).xyz;
+
+                // Get the centroids for the 
+                vec3 curCentroid      = ( currentTets[0] +  currentTets[1] +  currentTets[2] +  currentTets[3]) * 0.25;
+                vec3 lastRestCentroid = (lastRestTets[0] + lastRestTets[1] + lastRestTets[2] + lastRestTets[3]) * 0.25;
+
+                // Center the Deformed Tetrahedron
+                currentTets [0] -= curCentroid;
+                currentTets [1] -= curCentroid;
+                currentTets [2] -= curCentroid;
+                currentTets [3] -= curCentroid;
+
+                // Center the Undeformed Tetrahedron
+                lastRestTets[0] -= lastRestCentroid;
+                lastRestTets[1] -= lastRestCentroid;
+                lastRestTets[2] -= lastRestCentroid;
+                lastRestTets[3] -= lastRestCentroid;
+
+                // Find the rotational offset between the two and rotate the undeformed tetrahedron by it
+                vec4 rotation = extractRotation(TransposeMult(lastRestTets, currentTets), vec4(0.0, 0.0, 0.0, 1.0));
+
+                // Write out the undeformed tetrahedron
+                quat = normalize(quat_mult(rotation, texture2D( textureQuat, uv ))); // Keep track of the current Quaternion for normals
+            }`);
+        this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
+        this.solveElemPass.material.uniformsNeedUpdate = true;
+        this.solveElemPass.material.needsUpdate = true;
+
+        // 4. Gather into the Elements and use the solved rotations to rotate the rest pose
+        this.gatherElemPass = this.gpuCompute.addPass(this.elems, [this.pos, this.elems, this.quats], `
+            uniform float dt;
+            uniform sampler2D elemToParticlesTable, invRestVolume, invMassTex;
+            vec3[4] currentTets, lastRestTets, restTets;
+            float[4] invMass;
+
+            layout(location = 0) out vec4 vert1;
+            layout(location = 1) out vec4 vert2;
+            layout(location = 2) out vec4 vert3;
+            layout(location = 3) out vec4 vert4;
+            //layout(location = 4) out vec4 quat;
+
+            vec2 uvFromIndex(int index) {
+                return vec2(  index % int(resolution.x),
+                             (index / int(resolution.x))) / (resolution - 1.0); }
+
+            vec3 Rotate(vec3 pos, vec4 quat) {
+                return pos + 2.0 * cross(quat.xyz, cross(quat.xyz, pos) + quat.w * pos);
+            }
+            vec4 quat_conj(vec4 q) { return normalize(vec4(-q.x, -q.y, -q.z, q.w)); }
+            vec4 quat_mult(vec4 q1, vec4 q2) { 
+                vec4 qr;
+                qr.x = (q1.w * q2.x) + (q1.x * q2.w) + (q1.y * q2.z) - (q1.z * q2.y);
+                qr.y = (q1.w * q2.y) - (q1.x * q2.z) + (q1.y * q2.w) + (q1.z * q2.x);
+                qr.z = (q1.w * q2.z) + (q1.x * q2.y) - (q1.y * q2.x) + (q1.z * q2.w);
+                qr.w = (q1.w * q2.w) - (q1.x * q2.x) - (q1.y * q2.y) - (q1.z * q2.z);
+                return qr;
+            }
+
+            void main()	{
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
+                // Grab the Relevant Element Variables
                 float invVolume  = 1.0/texture2D( invRestVolume, uv ).x;
 
                 // Gather this tetrahedron's 4 vertex positions
@@ -164,7 +233,10 @@ export class SoftBodyGPU {
                 lastRestTets[1]    = texture2D( textureElem[1], uv ).xyz;
                 lastRestTets[2]    = texture2D( textureElem[2], uv ).xyz;
                 lastRestTets[3]    = texture2D( textureElem[3], uv ).xyz;
-                //vec4 starting_quat = texture2D( textureElem[4], uv );
+
+                vec4 latestQuat   = texture2D( textureQuat, uv );
+                vec4 previousQuat = texture2D( prev_textureQuat, uv );
+                vec4 relativeQuat = normalize(quat_mult(latestQuat, quat_conj(previousQuat)));
 
                 // Unused: The inverse mass of each vertex; I'm weighting positional
                 // updates by the the inverse volume instead because it looks better(?)
@@ -177,41 +249,26 @@ export class SoftBodyGPU {
                 vec3 curCentroid      = ( currentTets[0] +  currentTets[1] +  currentTets[2] +  currentTets[3]) * 0.25;
                 vec3 lastRestCentroid = (lastRestTets[0] + lastRestTets[1] + lastRestTets[2] + lastRestTets[3]) * 0.25;
 
-                // Center the Deformed Tetrahedron
-                currentTets[0] -= curCentroid;
-                currentTets[1] -= curCentroid;
-                currentTets[2] -= curCentroid;
-                currentTets[3] -= curCentroid;
+                // Rotate the undeformed tetrahedron by the deformed's rotation
+                lastRestTets[0] = Rotate(lastRestTets[0] - lastRestCentroid, relativeQuat) + curCentroid;
+                lastRestTets[1] = Rotate(lastRestTets[1] - lastRestCentroid, relativeQuat) + curCentroid;
+                lastRestTets[2] = Rotate(lastRestTets[2] - lastRestCentroid, relativeQuat) + curCentroid;
+                lastRestTets[3] = Rotate(lastRestTets[3] - lastRestCentroid, relativeQuat) + curCentroid;
 
-                // Center the Undeformed Tetrahedron
-                restTets[0] = lastRestTets[0] - lastRestCentroid;
-                restTets[1] = lastRestTets[1] - lastRestCentroid;
-                restTets[2] = lastRestTets[2] - lastRestCentroid;
-                restTets[3] = lastRestTets[3] - lastRestCentroid;
-
-                // Find the rotational offset between the two and rotate the undeformed tetrahedron by it
-                vec4 rotation = extractRotation(TransposeMult(restTets, currentTets));
-                restTets[0] = Rotate(restTets[0], rotation) + curCentroid;
-                restTets[1] = Rotate(restTets[1], rotation) + curCentroid;
-                restTets[2] = Rotate(restTets[2], rotation) + curCentroid;
-                restTets[3] = Rotate(restTets[3], rotation) + curCentroid;
-
-                // Write out the undeformed tetrahedron
-                vert1 = vec4(restTets[0], invVolume);
-                vert2 = vec4(restTets[1], invVolume);
-                vert3 = vec4(restTets[2], invVolume);
-                vert4 = vec4(restTets[3], invVolume);
-                //quat  = quat_mult(rotation, starting_quat); // Keep track of the current Quaternion for normals
-                //quat  = normalize(quat);
+                // Write out the rotated undeformed tetrahedron
+                vert1 = vec4(lastRestTets[0], invVolume);
+                vert2 = vec4(lastRestTets[1], invVolume);
+                vert3 = vec4(lastRestTets[2], invVolume);
+                vert4 = vec4(lastRestTets[3], invVolume);
             }`);
-        this.solveElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
-        this.solveElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
-        this.solveElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolumeAndColor };
-        this.solveElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
-        this.solveElemPass.material.uniformsNeedUpdate = true;
-        this.solveElemPass.material.needsUpdate = true;
+        this.gatherElemPass.material.uniforms['dt'                  ] = { value: this.physicsParams.dt };
+        this.gatherElemPass.material.uniforms['elemToParticlesTable'] = { value: this.elemToParticlesTable };
+        this.gatherElemPass.material.uniforms['invRestVolume'       ] = { value: this.invRestVolumeAndColor };
+        this.gatherElemPass.material.uniforms['invMassTex'          ] = { value: this.invMass      };
+        this.gatherElemPass.material.uniformsNeedUpdate = true;
+        this.gatherElemPass.material.needsUpdate = true;
 
-        // 4. Gather the particles back from the elements
+        // 5. Gather the particles back from the elements
         this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
         `
             out highp vec4 pc_fragColor;
@@ -455,10 +512,11 @@ export class SoftBodyGPU {
             this.elems0[3].image.data[(4 * i)    ] = this.inputPos[(id3 * 3) + 0];
             this.elems0[3].image.data[(4 * i) + 1] = this.inputPos[(id3 * 3) + 1];
             this.elems0[3].image.data[(4 * i) + 2] = this.inputPos[(id3 * 3) + 2];
-            //this.elems0[4].image.data[(4 * i)    ] = 0.0; // Quaternion
-            //this.elems0[4].image.data[(4 * i) + 1] = 0.0;
-            //this.elems0[4].image.data[(4 * i) + 2] = 0.0;
-            //this.elems0[4].image.data[(4 * i) + 3] = 1.0;
+            // Initialize quaternions
+            this.quats0.image.data[(4 * i)    ] = 0.0; // Quaternion
+            this.quats0.image.data[(4 * i) + 1] = 0.0;
+            this.quats0.image.data[(4 * i) + 2] = 0.0;
+            this.quats0.image.data[(4 * i) + 3] = 1.0;
 
             // The forward table
             this.elemToParticlesTable.image.data[(4 * i)    ] = id0;
@@ -518,10 +576,10 @@ export class SoftBodyGPU {
             this.xpbdIntegratePass.material.uniformsNeedUpdate = true;
             this.xpbdIntegratePass.material.needsUpdate = true;
         }
-        if (this.solveElemPass) {
-            this.solveElemPass.material.uniforms['dt'] = { value: physicsParams.dt };
-            this.solveElemPass.material.uniformsNeedUpdate = true;
-            this.solveElemPass.material.needsUpdate = true;
+        if (this.gatherElemPass) {
+            this.gatherElemPass.material.uniforms['dt'] = { value: physicsParams.dt };
+            this.gatherElemPass.material.uniformsNeedUpdate = true;
+            this.gatherElemPass.material.needsUpdate = true;
         }
         if (this.collisionPass) {
             this.collisionPass.material.uniforms['dt'] = { value: physicsParams.dt };
