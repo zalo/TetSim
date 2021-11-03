@@ -585,8 +585,6 @@ export class SoftBodyGPU {
         console.log(biggestT);
     }
 
-    // ----------------- begin solver -----------------------------------------------------                
-
     simulate(dt, physicsParams) {
         physicsParams.dt = dt;
 
@@ -619,8 +617,6 @@ export class SoftBodyGPU {
         // Run a substep!
         this.gpuCompute.compute();
     }
-
-    // ----------------- end solver -----------------------------------------------------                
 
     endFrame() {
         //this.updateEdgeMesh();
