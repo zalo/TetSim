@@ -424,14 +424,8 @@ export class SoftBodyGPU {
         let vertShaderInit = `attribute vec4 tetWeights;
         uniform sampler2D texturePos, elemToParticlesTable, textureQuat;
         vec4 getValueByIndexFromTexture(sampler2D tex, int index) {
-            ivec2 texSize = textureSize(tex, 0);
-            return texelFetch(tex, ivec2(
-                index % texSize.x,
-                index / texSize.x), 0);
-        }
-        vec3 Rotate(vec3 pos, vec4 quat) {
-           return pos + 2.0 * cross(quat.xyz, cross(quat.xyz, pos) + quat.w * pos);
-        }\n`;
+            ivec2 texSize = textureSize(tex, 0); return texelFetch(tex, ivec2( index % texSize.x, index / texSize.x), 0); }
+        vec3 Rotate(vec3 pos, vec4 quat) { return pos + 2.0 * cross(quat.xyz, cross(quat.xyz, pos) + quat.w * pos); }\n`;
         let vertShaderMain = `vec4 tetQuaternion = getValueByIndexFromTexture(textureQuat, int(tetWeights.x));
             vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
             float lastTetWeight = 1.0 - (tetWeights.y + tetWeights.z + tetWeights.w);
@@ -439,39 +433,19 @@ export class SoftBodyGPU {
                                        (getValueByIndexFromTexture(texturePos, int(vertIndices.y)) * tetWeights.z) + 
                                        (getValueByIndexFromTexture(texturePos, int(vertIndices.z)) * tetWeights.w) + 
                                        (getValueByIndexFromTexture(texturePos, int(vertIndices.w)) * lastTetWeight)).xyz, 1.0);
-            worldPosition = modelMatrix * vertPosition;
             mvPosition = modelViewMatrix * vertPosition;
             gl_Position = projectionMatrix * mvPosition;
-
+        }`;
+        let vertShaderMainColor = vertShaderMain.slice(0, -1) + `
             transformedNormal = Rotate(objectNormal, tetQuaternion);
+            vNormal = normalMatrix * transformedNormal;
+            worldPosition = modelMatrix * vertPosition; // This line and below might not be needed...
             shadowWorldNormal = inverseTransformDirection( transformedNormal, viewMatrix );
             shadowWorldPosition = worldPosition + vec4( shadowWorldNormal * directionalLightShadows[ 0 ].shadowNormalBias, 0 );
             vDirectionalShadowCoord[ 0 ] = directionalShadowMatrix[ 0 ] * shadowWorldPosition;
             shadowWorldPosition = worldPosition + vec4( shadowWorldNormal * spotLightShadows[ 0 ].shadowNormalBias, 0 );
             vSpotShadowCoord[ 0 ] = spotShadowMatrix[ 0 ] * shadowWorldPosition;
-            vNormal = normalMatrix * Rotate(objectNormal, tetQuaternion);
         }`;
-        let vertShaderMainDepth = `vec4 tetQuaternion = getValueByIndexFromTexture(textureQuat, int(tetWeights.x));
-        vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
-        float lastTetWeight = 1.0 - (tetWeights.y + tetWeights.z + tetWeights.w);
-        vec4 vertPosition = vec4(((getValueByIndexFromTexture(texturePos, int(vertIndices.x)) * tetWeights.y) + 
-                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.y)) * tetWeights.z) + 
-                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.z)) * tetWeights.w) + 
-                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.w)) * lastTetWeight)).xyz, 1.0);
-        mvPosition = modelViewMatrix * vertPosition;
-        gl_Position = projectionMatrix * mvPosition;
-        vHighPrecisionZW = gl_Position.zw;
-        }`;
-
-        visMaterial.onBeforeCompile = (shader) => {
-            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
-            shader.vertexShader =
-                 shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
-                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain;
-            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
-            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
-        };
 
         // visual embedded mesh
         this.visVerts = visVerts; // <- These are barycentric weights inside each tetrahedra
@@ -486,13 +460,21 @@ export class SoftBodyGPU {
         this.visMesh.userData = this;    // for raycasting
         this.visMesh.layers.enable(1);
 
-        // This is broken; not sure why...
+        this.visMesh.material.onBeforeCompile = (shader) => {
+            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+            shader.vertexShader =
+                 shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
+                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainColor;
+            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
+        };
         this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
         this.visMesh.customDepthMaterial.onBeforeCompile = (shader) => {
             let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
             shader.vertexShader =
                  shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
-                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainDepth;
+                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain.slice(0, -1) + "vHighPrecisionZW = gl_Position.zw;}";
             shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
             shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
             shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
