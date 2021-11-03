@@ -427,15 +427,19 @@ export class SoftBodyGPU {
             shader.vertexShader =
                 'attribute vec4 tetWeights;\n' +
                  shader.vertexShader.slice(0, bodyStart) +
-                 `uniform sampler2D texturePos, elemToParticlesTable;
+                 `uniform sampler2D texturePos, elemToParticlesTable, textureQuat;
                  vec4 getValueByIndexFromTexture(sampler2D tex, int index) {
                      ivec2 texSize = textureSize(tex, 0);
                      return texelFetch(tex, ivec2(
                          index % texSize.x,
                          index / texSize.x), 0);
+                 }
+                 vec3 Rotate(vec3 pos, vec4 quat) {
+                    return pos + 2.0 * cross(quat.xyz, cross(quat.xyz, pos) + quat.w * pos);
                  }\n` +
                  shader.vertexShader.slice(bodyStart - 1, - 1) +
-                 `vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
+                 `vec4 tetQuaternion = getValueByIndexFromTexture(textureQuat, int(tetWeights.x));
+                 vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
                  float lastTetWeight = 1.0 - (tetWeights.y + tetWeights.z + tetWeights.w);
                  vec4 vertPosition = ((getValueByIndexFromTexture(texturePos, int(vertIndices.x)) * tetWeights.y) + 
                                       (getValueByIndexFromTexture(texturePos, int(vertIndices.y)) * tetWeights.z) + 
@@ -443,9 +447,12 @@ export class SoftBodyGPU {
                                       (getValueByIndexFromTexture(texturePos, int(vertIndices.w)) * lastTetWeight));
                  mvPosition = modelViewMatrix * vec4( vertPosition.xyz, 1.0 );
                  gl_Position = projectionMatrix * mvPosition;
+
+                 vNormal = normalMatrix * Rotate(objectNormal, tetQuaternion);
             }`;
             
             shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
             shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
         };
 
