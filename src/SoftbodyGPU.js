@@ -451,6 +451,17 @@ export class SoftBodyGPU {
             vSpotShadowCoord[ 0 ] = spotShadowMatrix[ 0 ] * shadowWorldPosition;
             vNormal = normalMatrix * Rotate(objectNormal, tetQuaternion);
         }`;
+        let vertShaderMainDepth = `vec4 tetQuaternion = getValueByIndexFromTexture(textureQuat, int(tetWeights.x));
+        vec4 vertIndices = getValueByIndexFromTexture(elemToParticlesTable, int(tetWeights.x));
+        float lastTetWeight = 1.0 - (tetWeights.y + tetWeights.z + tetWeights.w);
+        vec4 vertPosition = vec4(((getValueByIndexFromTexture(texturePos, int(vertIndices.x)) * tetWeights.y) + 
+                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.y)) * tetWeights.z) + 
+                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.z)) * tetWeights.w) + 
+                                   (getValueByIndexFromTexture(texturePos, int(vertIndices.w)) * lastTetWeight)).xyz, 1.0);
+        mvPosition = modelViewMatrix * vertPosition;
+        gl_Position = projectionMatrix * mvPosition;
+        vHighPrecisionZW = gl_Position.zw;
+        }`;
 
         visMaterial.onBeforeCompile = (shader) => {
             let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
@@ -476,16 +487,16 @@ export class SoftBodyGPU {
         this.visMesh.layers.enable(1);
 
         // This is broken; not sure why...
-        //this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial();
-        //this.visMesh.customDepthMaterial.onBeforeCompile = (shader) => {
-        //    let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
-        //    shader.vertexShader =
-        //         shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
-        //         shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain.slice(0, -1) + '\n vHighPrecisionZW = gl_Position.zw;}';
-        //    shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-        //    shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
-        //    shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
-        //};
+        this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+        this.visMesh.customDepthMaterial.onBeforeCompile = (shader) => {
+            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+            shader.vertexShader =
+                 shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
+                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainDepth;
+            shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
+        };
 
         this.geometry.computeVertexNormals();
         this.updateVisMesh();
