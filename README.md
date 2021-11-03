@@ -9,7 +9,7 @@
       <img src="https://img.shields.io/github/license/zalo/TetSim" title="License: Apache V2"></a>-->  <!-- No idea what license this should be! -->
 </p>
 
-Simulate Tetrahedral FEM Models in your browser in real-time!
+Simulate Tetrahedral FEM Models in your browser in real-time using the GPU!
 
 ![Gif of TetSim in action](./TetSimDemo.gif)
 
@@ -25,7 +25,7 @@ I've broken the script into several ES6 Module pieces with the intention of impr
 This one rewrites the entire simulation as a set of GPU passes on Render Textures (gaining a **~20x speedup**).  This does NOT use the Neohookean energy/constraint function.  This is because the Neohookean function only converges well with Gauss-Seidel iterations (which are tricky to implement on the GPU (see: [Graph Coloring](https://erkaman.github.io/posts/gauss_seidel_graph_coloring.html)), and especially tricky to implement for this example dragon mesh, which has vertices with over 30 connecting tetrahedra).   Instead, this simulation uses [Matthias Müller's Robust Polar Decomposition](https://www.youtube.com/watch?v=YOBjHpoImu8) on the tetrahedra, which converges much faster (and with GPU-friendly Jacobi Iterations).
 
  - 20x faster
- - Doesn't work on iOS (not sure why yet...)
+ - Even works on Mobile Devices (though Android devices behave strangely)
  - Not physically correct (doesn't incorporate deltaTime properly yet)
 
 
