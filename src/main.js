@@ -4,6 +4,7 @@ import { SoftBody, Grabber } from './Softbody.js';
 import { SoftBodyGPU, GPUGrabber } from './SoftbodyGPU.js';
 import { dragonTetVerts, dragonTetIds, dragonTetEdgeIds, dragonAttachedVerts, dragonAttachedTriIds } from './Dragon.js';
 import World from './World.js';
+import { MSHLoader } from './MSHLoader.js';
 
 /** The fundamental set up and animation structures for 3D Visualization */
 export default class Main {
@@ -46,6 +47,17 @@ export default class Main {
 
         // Construct the render world
         this.world = new World(this);
+
+        // Load in a sample fTetWild Mesh
+        this.mshLoader = new MSHLoader();
+        this.mshLoader.load('./src/Test.obj_.msh', (geometry) => {
+            geometry.computeVertexNormals();
+            this.tetMat = new THREE.MeshBasicMaterial(
+                { color: 0xffffff, wireframe: false, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
+            this.tetMesh = new THREE.Mesh(geometry, this.tetMat);
+            this.tetMesh.scale.set(0.02, 0.02, 0.02);
+            this.world.scene.add( this.tetMesh );
+        });
 
         // Construct the physics world
         this.physicsScene = { softBodies: [] };
