@@ -26,20 +26,17 @@ export class SoftBodyGPU {
         this.invMass               = this.gpuCompute.createTexture(); // Inverse Mass Per Particle
         this.invRestVolumeAndColor = this.gpuCompute.createTexture(); // Inverse Volume and Graph Color Per Element
         this.elemToParticlesTable  = this.gpuCompute.createTexture(); // Maps from elems to the 4 tet vertex positions for the gather step
-        this.particleToElemVertsTable = [this.gpuCompute.createTexture(), // Maps from vertices back to the elems gbuffer for the scatter step
-                                     this.gpuCompute.createTexture(), // There is more than one because a particle may have a bunch of elems sharing it
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture(),
-                                     this.gpuCompute.createTexture()];
         this.elems0               = [this.gpuCompute.createTexture(), // Stores the original vertex positions per tet
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture(),
                                      this.gpuCompute.createTexture()];
         this.quats0                = this.gpuCompute.createTexture();
+        // Maps from vertices back to the elems gbuffer for the scatter step
+        // There is more than one because a particle may have a bunch of elems sharing it
+        this.numTables = 11; this.particleToElemVertsTable = [];
+        for (let table = 0; table < this.numTables; table++) {
+            this.particleToElemVertsTable.push(this.gpuCompute.createTexture());
+        }
 
         // Fill in the above textures with the appropriate data
         this.tetIds = tetIds;
@@ -269,11 +266,15 @@ export class SoftBodyGPU {
         this.gatherElemPass.material.needsUpdate = true;
 
         // 5. Gather the particles back from the elements
+        let unrollLoop = '';
+        for (let t = 2; t < this.numTables; t++) {
+            unrollLoop += '} else if (index == '+t+') { result  = texture2D( particleToElemVertsTable['+t+'], uv );\n';
+        }
         this.applyElemPass = this.gpuCompute.addPass(this.pos, [this.elems, this.pos],
         `
             out highp vec4 pc_fragColor;
             uniform float dt;
-            uniform sampler2D particleToElemVertsTable[9];
+            uniform sampler2D particleToElemVertsTable[`+this.numTables+`];
 
             vec2 uvFromIndex(int index) {
                 return vec2(  index % int(resolution.x),
@@ -289,21 +290,15 @@ export class SoftBodyGPU {
             }
             vec4 particleToElemVertsTableSample(int index, vec2 uv) {
                 vec4 result = texture2D( particleToElemVertsTable[0], uv );
-                       if (index == 1) { result  = texture2D( particleToElemVertsTable[1], uv );
-                } else if (index == 2) { result  = texture2D( particleToElemVertsTable[2], uv );
-                } else if (index == 3) { result  = texture2D( particleToElemVertsTable[3], uv );
-                } else if (index == 4) { result  = texture2D( particleToElemVertsTable[4], uv );
-                } else if (index == 5) { result  = texture2D( particleToElemVertsTable[5], uv );
-                } else if (index == 6) { result  = texture2D( particleToElemVertsTable[6], uv );
-                } else if (index == 7) { result  = texture2D( particleToElemVertsTable[7], uv );
-                } else if (index == 8) { result  = texture2D( particleToElemVertsTable[8], uv ); }
+                       if (index == 1) { result  = texture2D( particleToElemVertsTable[1], uv );\n`
+                       + unrollLoop + `}
                 return result;
             }
             void main()	{
                 vec2 uv = gl_FragCoord.xy / resolution.xy;
                 vec3 pos = texture2D( texturePos, uv ).xyz;
                 vec3 sumVertex = vec3(0.0); int breaker = 0; float sum = 0.0;
-                for(int tableId = 0; tableId < 9; tableId++) {
+                for(int tableId = 0; tableId < `+this.numTables+`; tableId++) {
                     vec4 vertIndices = particleToElemVertsTableSample(tableId, uv);
                     for(int component = 0; component < 4; component++) {
                         if(vertIndices[component] > -1.0) {
@@ -448,40 +443,40 @@ export class SoftBodyGPU {
         }`;
 
         // visual embedded mesh
-        this.visVerts = visVerts; // <- These are barycentric weights inside each tetrahedra
-        this.numVisVerts = visVerts.length / 4;
-        this.geometry = new THREE.BufferGeometry();
-        this.geometry.setAttribute('position', new THREE.BufferAttribute(
-            new Float32Array(3 * this.numVisVerts), 3));
-        this.geometry.setAttribute('tetWeights', new THREE.BufferAttribute(this.visVerts, 4));
-        this.geometry.setIndex(visTriIds);
-        this.visMesh = new THREE.Mesh(this.geometry, visMaterial);
-        this.visMesh.castShadow = true;
-        this.visMesh.userData = this;    // for raycasting
-        this.visMesh.layers.enable(1);
+        //this.visVerts = visVerts; // <- These are barycentric weights inside each tetrahedra
+        //this.numVisVerts = visVerts.length / 4;
+        //this.geometry = new THREE.BufferGeometry();
+        //this.geometry.setAttribute('position', new THREE.BufferAttribute(
+        //    new Float32Array(3 * this.numVisVerts), 3));
+        //this.geometry.setAttribute('tetWeights', new THREE.BufferAttribute(this.visVerts, 4));
+        //this.geometry.setIndex(visTriIds);
+        //this.visMesh = new THREE.Mesh(this.geometry, visMaterial);
+        //this.visMesh.castShadow = true;
+        //this.visMesh.userData = this;    // for raycasting
+        //this.visMesh.layers.enable(1);
 
-        this.visMesh.material.onBeforeCompile = (shader) => {
-            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
-            shader.vertexShader =
-                 shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
-                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainColor;
-            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
-            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
-        };
-        this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
-        this.visMesh.customDepthMaterial.onBeforeCompile = (shader) => {
-            let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
-            shader.vertexShader =
-                 shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
-                 shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain.slice(0, -1) + "vHighPrecisionZW = gl_Position.zw;}";
-            shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
-            shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
-        };
+        //this.visMesh.material.onBeforeCompile = (shader) => {
+        //    let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+        //    shader.vertexShader =
+        //         shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
+        //         shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainColor;
+        //    shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+        //    shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+        //    shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
+        //};
+        //this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+        //this.visMesh.customDepthMaterial.onBeforeCompile = (shader) => {
+        //    let bodyStart = shader.vertexShader.indexOf( 'void main() {' );
+        //    shader.vertexShader =
+        //         shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
+        //         shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain.slice(0, -1) + "vHighPrecisionZW = gl_Position.zw;}";
+        //    shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
+        //    shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+        //    shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
+        //};
 
-        this.geometry.computeVertexNormals();
-        this.updateVisMesh();
+        //this.geometry.computeVertexNormals();
+        //this.updateVisMesh();
     }
 
     initPhysics(density) {
@@ -491,15 +486,9 @@ export class SoftBodyGPU {
         for (let i = 0; i < this.vel0.image.data.length; i++){
             this.vel0                       .image.data[i] = 0.0;
             this.invMass                    .image.data[i] = 0.0;
-            this.particleToElemVertsTable[0].image.data[i] = -1.0;
-            this.particleToElemVertsTable[1].image.data[i] = -1.0;
-            this.particleToElemVertsTable[2].image.data[i] = -1.0;
-            this.particleToElemVertsTable[3].image.data[i] = -1.0;
-            this.particleToElemVertsTable[4].image.data[i] = -1.0;
-            this.particleToElemVertsTable[5].image.data[i] = -1.0;
-            this.particleToElemVertsTable[6].image.data[i] = -1.0;
-            this.particleToElemVertsTable[7].image.data[i] = -1.0;
-            this.particleToElemVertsTable[8].image.data[i] = -1.0;
+            for (let table = 0; table < this.numTables; table++) {
+                this.particleToElemVertsTable[table].image.data[i] = -1.0;
+            }
         }
 
         // Initialize the positions of the vertices
@@ -556,7 +545,7 @@ export class SoftBodyGPU {
                         if (this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] <= 0.0) {
                             this.particleToElemVertsTable[t].image.data[(4 * ids[id]) + c] = (4.0 * i) + id;
                             biggestT = Math.max(biggestT, t);
-                            //if (t == 7) { console.log(ids[id], (4 * ids[id]) + c);}
+                            if (t == this.numTables-1) { console.log(ids[id], (4 * ids[id]) + c);}
                             assigned = true; break;
                         }
                     }

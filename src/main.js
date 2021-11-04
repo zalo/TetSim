@@ -32,7 +32,7 @@ export default class Main {
             volCompliance : 0.0,
             worldBounds   : [-2.5,-1.0, -2.5, 2.5, 10.0, 2.5],
             computeNormals: true,
-            ShowTetMesh   : false,
+            ShowTetMesh   : true,
             cpuSim        : cpuSim
         };
         this.gui = new GUI();
@@ -51,33 +51,26 @@ export default class Main {
         // Load in a sample fTetWild Mesh
         this.mshLoader = new MSHLoader();
         this.mshLoader.load('./src/Test.obj_.msh', (geometry) => {
-            geometry.computeVertexNormals();
-            this.tetMat = new THREE.MeshBasicMaterial(
-                { color: 0xffffff, wireframe: false, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
-            this.tetMesh = new THREE.Mesh(geometry, this.tetMat);
-            this.tetMesh.scale.set(0.02, 0.02, 0.02);
-            this.world.scene.add( this.tetMesh );
+            // Shrink the Geometry
+            for (let i = 0; i < geometry.attributes.position.array.length; i++) {
+                geometry.attributes.position.array[i] *= 0.02;
+            }
+
+            // Create the soft body for the loaded mesh
+            this.testMesh = new SoftBodyGPU(
+                geometry.attributes.position.array,
+                geometry.userData.tetIndices,
+                geometry.userData.index,
+                this.physicsParams, null, null, null, this.world);
+            this.physicsScene.softBodies.push(this.testMesh);
+            this.grabber = new GPUGrabber(
+                this.world.scene, this.world.renderer, this.world.camera,
+                this.world.container.parentElement, this.world.controls);
+            this.world.scene.add(this.testMesh.edgeMesh);
         });
 
         // Construct the physics world
         this.physicsScene = { softBodies: [] };
-        if (this.physicsParams.cpuSim) {
-            this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }));
-            this.physicsScene.softBodies.push(this.dragon);
-            this.grabber = new Grabber(
-                this.world.scene, this.world.renderer, this.world.camera,
-                this.world.container.parentElement, this.world.controls);
-        } else {
-            this.dragon = new SoftBodyGPU(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }), this.world);
-            this.physicsScene.softBodies.push(this.dragon);
-            this.grabber = new GPUGrabber(
-                this.world.scene, this.world.renderer, this.world.camera,
-                this.world.container.parentElement, this.world.controls);
-        }
-        this.world.scene.add(this.dragon.edgeMesh);
-        this.world.scene.add(this.dragon.visMesh);
 
         //this.previousTime = (performance.now()*0.001) - 1/60.0;
     }

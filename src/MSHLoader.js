@@ -77,6 +77,7 @@ class MSHLoader extends Loader {
 			const geometry = new BufferGeometry();
 
 			const indices = [];
+			const tetindices = [];
 			const vertices = [];
 
 			let numVertices = 0;
@@ -118,10 +119,13 @@ class MSHLoader extends Loader {
 						//indices.push(parseInt(currentLine[0]));
 						//1 4 0 1185 1192 1440 1135
 						let verts = [parseInt(currentLine[3])-1, parseInt(currentLine[4])-1, parseInt(currentLine[5])-1, parseInt(currentLine[6])-1];
-						indices.push(verts[0], verts[1], verts[2]);
-						indices.push(verts[1], verts[2], verts[3]);
-						indices.push(verts[0], verts[1], verts[3]);
-						indices.push(verts[0], verts[2], verts[3]);
+						indices.push(verts[0], verts[1]); // Edge Ids
+						indices.push(verts[0], verts[2]);
+						indices.push(verts[0], verts[3]);
+						indices.push(verts[1], verts[2]);
+						indices.push(verts[2], verts[3]);
+						indices.push(verts[3], verts[1]);
+						tetindices.push(verts[0], verts[1], verts[2], verts[3]);
 					} else {
 						console.error('Invalid Element line: ' + lines[l]);
 					}
@@ -129,8 +133,12 @@ class MSHLoader extends Loader {
 
 			}
 
-			geometry.setIndex(  indices );
+			geometry.setIndex( indices );
 			geometry.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
+			geometry.setAttribute( 'tetIndices', new Float32BufferAttribute( tetindices, 4 ) );
+			geometry.userData.vertices = vertices;
+			geometry.userData.tetIndices = tetindices;
+			geometry.userData.index = indices;
 
 			return geometry;
 
