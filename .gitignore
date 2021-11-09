@@ -42,10 +42,12 @@ jspm_packages/
 !node_modules/three/build/*
 # Three.js Controls
 !node_modules/three/examples/*/
-!node_modules/three/examples/js/
-!node_modules/three/examples/js/*/
-!node_modules/three/examples/js/controls/
-!node_modules/three/examples/js/controls/*
+!node_modules/three/examples/jsm/
+!node_modules/three/examples/jsm/*/
+!node_modules/three/examples/jsm/controls/
+!node_modules/three/examples/jsm/controls/*
+!node_modules/three/examples/jsm/libs/
+!node_modules/three/examples/jsm/libs/*
 
 # TypeScript v1 declaration files
 typings/
