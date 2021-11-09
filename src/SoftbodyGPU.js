@@ -291,7 +291,17 @@ export class SoftBodyGPU {
                     pos.xz += F.xz * min(1.0, dt * friction);
                 }
                 pc_fragColor = vec4(pos, 0.0 );
-            }`);
+            }`,
+        { // Async Texture Readback Parameters
+            x: 0,
+            y: 0,
+            w: this.texDim,
+            h: this.texDim,
+            format: 6408,//gl.RGBA = 6408
+            type: 5126,//gl.FLOAT = 5126, gl.UINT8 = 5121
+            buffer: this.tetPositionsArray,
+            callback: this.endFrame.bind(this)
+            });
         this.collisionPass.material.uniforms['dt'      ] = { value: this.physicsParams.dt };
         this.collisionPass.material.uniforms['friction'] = { value: this.physicsParams.friction };
         this.collisionPass.material.uniforms['grabId'  ] = { value: -1 };
@@ -450,7 +460,7 @@ export class SoftBodyGPU {
 
     // ----------------- begin solver -----------------------------------------------------                
 
-    simulate(dt, physicsParams) {
+    simulate(dt, physicsParams, triggerAsyncRead = false) {
         physicsParams.dt = dt;
 
         // First, upload the new shader uniforms to the GPU
@@ -480,7 +490,7 @@ export class SoftBodyGPU {
         }
 
         // Run a substep!
-        this.gpuCompute.compute();
+        this.gpuCompute.compute(triggerAsyncRead);
     }
 
     // ----------------- end solver -----------------------------------------------------                
@@ -498,7 +508,8 @@ export class SoftBodyGPU {
 
     updateEdgeMesh() {
         // Read tetrahedron positions back from the GPU
-        this.readToCPU(this.pos, this.tetPositionsArray);
+        // This is now called automatically after the last position update step
+        //this.readToCPU(this.pos, this.tetPositionsArray);
 
         let positionIndex = 0;
         const positions = this.edgeMesh.geometry.attributes.position.array;

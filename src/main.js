@@ -78,14 +78,15 @@ export default class Main {
         let dt = (this.physicsParams.timeScale * this.physicsParams.timeStep) / this.physicsParams.numSubsteps;
         for (let step = 0; step < this.physicsParams.numSubsteps; step++) {
             for (let i = 0; i < this.physicsScene.softBodies.length; i++) {
-                this.physicsScene.softBodies[i].simulate(dt, this.physicsParams);
+                this.physicsScene.softBodies[i].simulate(dt, this.physicsParams, step == this.physicsParams.numSubsteps - 1);
             }
         }
 
         // Update their visual representations
-        for (let i = 0; i < this.physicsScene.softBodies.length; i++) {
-            this.physicsScene.softBodies[i].endFrame();
-        }
+        // This now happens automatically and asynchronously on the last simulation step
+        //for (let i = 0; i < this.physicsScene.softBodies.length; i++) {
+        //    this.physicsScene.softBodies[i].endFrame();
+        //}
 
         // Render the scene and update the framerate counter
         this.world.controls.update();

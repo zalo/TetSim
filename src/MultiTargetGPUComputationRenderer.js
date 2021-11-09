@@ -163,13 +163,14 @@ class MultiTargetGPUComputationRenderer {
 
         };
 
-        this.addPass = function (variable, dependencies, computeFragmentShader) {
+        this.addPass = function (variable, dependencies, computeFragmentShader, asyncReadParams = {}) {
 
             let pass = {
                 variable: variable,
                 material: this.createShaderMaterial(computeFragmentShader),
                 dependencies: dependencies
             };
+            Object.assign(pass, pass, asyncReadParams); // Read in async read params
 
             this.passes.push(pass);
 
@@ -265,7 +266,7 @@ class MultiTargetGPUComputationRenderer {
 
         };
 
-        this.compute = function () {
+        this.compute = function (triggerAsyncRead) {
 
             for (let i = 0, il = this.passes.length; i < il; i++) {
 
@@ -289,7 +290,7 @@ class MultiTargetGPUComputationRenderer {
                 }
 
                 // Performs the computation for this variable
-                this.doRenderTarget(pass.material, pass.variable.renderTargets[nextTextureIndex]);
+                this.doRenderTarget(pass.material, pass.variable.renderTargets[nextTextureIndex], triggerAsyncRead, pass);
 
                 pass.variable.currentTextureIndex = nextTextureIndex;
 
@@ -435,18 +436,74 @@ class MultiTargetGPUComputationRenderer {
 
         };
 
-        this.doRenderTarget = function (material, output) {
+        this.doRenderTarget = function (material, output, triggerReadback, pass) {
 
             const currentRenderTarget = renderer.getRenderTarget();
 
             mesh.material = material;
             renderer.setRenderTarget(output);
             renderer.render(scene, camera);
+
+            // If this is the time to trigger an async read, do it!
+            if (triggerReadback && pass.buffer) {
+                readPixelsAsync(renderer.getContext(), pass.x, pass.y,
+                    pass.w, pass.h, pass.format, pass.type, pass.buffer).then(
+                    pass.callback, (err) => { console.error(err); });
+            }
+
             mesh.material = passThruShader;
 
             renderer.setRenderTarget(currentRenderTarget);
 
         };
+
+        // async readback
+
+        function clientWaitAsync(gl, sync, flags, interval_ms) {
+            return new Promise((resolve, reject) => {
+              function test() {
+                const res = gl.clientWaitSync(sync, flags, 0);
+                if (res == gl.WAIT_FAILED) {
+                  reject();
+                  return;
+                }
+                if (res == gl.TIMEOUT_EXPIRED) {
+                  setTimeout(test, interval_ms);
+                  return;
+                }
+                resolve();
+              }
+              test();
+            });
+          }
+          
+          async function getBufferSubDataAsync(
+              gl, target, buffer, srcByteOffset, dstBuffer,
+              /* optional */ dstOffset, /* optional */ length) {
+            const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            gl.flush();
+          
+            await clientWaitAsync(gl, sync, 0, 10);
+            gl.deleteSync(sync);
+          
+            gl.bindBuffer(target, buffer);
+            gl.getBufferSubData(target, srcByteOffset, dstBuffer, dstOffset, length);
+            gl.bindBuffer(target, null);
+          }
+          
+          async function readPixelsAsync(gl, x, y, w, h, format, type, dest) {
+            const buf = gl.createBuffer();
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+            gl.bufferData(gl.PIXEL_PACK_BUFFER, dest.byteLength, gl.STREAM_READ);
+            gl.readPixels(x, y, w, h, format, type, 0);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+          
+            await getBufferSubDataAsync(gl, gl.PIXEL_PACK_BUFFER, buf, 0, dest);
+          
+            gl.deleteBuffer(buf);
+            return dest;
+          }
+
 
         // Shaders
 
