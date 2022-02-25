@@ -1,9 +1,10 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
-import { GUI } from '../node_modules/three/examples/jsm/libs/dat.gui.module.js';
+import { GUI } from '../node_modules/three/examples/jsm/libs/lil-gui.module.min.js';
 import { SoftBody, Grabber } from './Softbody.js';
 import { SoftBodyGPU, GPUGrabber } from './SoftbodyGPU.js';
 import { dragonTetVerts, dragonTetIds, dragonTetEdgeIds, dragonAttachedVerts, dragonAttachedTriIds } from './Dragon.js';
 import World from './World.js';
+import { MSHLoader } from './MSHLoader.js';
 
 /** The fundamental set up and animation structures for 3D Visualization */
 export default class Main {
@@ -31,7 +32,7 @@ export default class Main {
             volCompliance : 0.0,
             worldBounds   : [-2.5,-1.0, -2.5, 2.5, 10.0, 2.5],
             computeNormals: true,
-            ShowTetMesh   : false,
+            ShowTetMesh   : true,
             cpuSim        : cpuSim
         };
         this.gui = new GUI();
@@ -47,25 +48,29 @@ export default class Main {
         // Construct the render world
         this.world = new World(this);
 
-        // Construct the physics world
-        this.physicsScene = { softBodies: [] };
-        if (this.physicsParams.cpuSim) {
-            this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }));
-            this.physicsScene.softBodies.push(this.dragon);
-            this.grabber = new Grabber(
-                this.world.scene, this.world.renderer, this.world.camera,
-                this.world.container.parentElement, this.world.controls);
-        } else {
-            this.dragon = new SoftBodyGPU(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }), this.world);
-            this.physicsScene.softBodies.push(this.dragon);
+        // Load in a sample fTetWild Mesh
+        this.mshLoader = new MSHLoader();
+        this.mshLoader.load('./src/Test.obj_.msh', (geometry) => {
+            // Shrink the Geometry
+            for (let i = 0; i < geometry.attributes.position.array.length; i++) {
+                geometry.attributes.position.array[i] *= 0.02;
+            }
+
+            // Create the soft body for the loaded mesh
+            this.testMesh = new SoftBodyGPU(
+                geometry.attributes.position.array,
+                geometry.userData.tetIndices,
+                geometry.userData.index,
+                this.physicsParams, null, null, null, this.world);
+            this.physicsScene.softBodies.push(this.testMesh);
             this.grabber = new GPUGrabber(
                 this.world.scene, this.world.renderer, this.world.camera,
                 this.world.container.parentElement, this.world.controls);
-        }
-        this.world.scene.add(this.dragon.edgeMesh);
-        this.world.scene.add(this.dragon.visMesh);
+            this.world.scene.add(this.testMesh.edgeMesh);
+        });
+
+        // Construct the physics world
+        this.physicsScene = { softBodies: [] };
 
         //this.previousTime = (performance.now()*0.001) - 1/60.0;
     }
