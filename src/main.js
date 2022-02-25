@@ -1,5 +1,5 @@
 import * as THREE from '../node_modules/three/build/three.module.js';
-import { GUI } from '../node_modules/three/examples/jsm/libs/dat.gui.module.js';
+import { GUI } from '../node_modules/three/examples/jsm/libs/lil-gui.module.min.js';
 import { SoftBody, Grabber } from './Softbody.js';
 import { SoftBodyGPU, GPUGrabber } from './SoftbodyGPU.js';
 import { dragonTetVerts, dragonTetIds, dragonTetEdgeIds, dragonAttachedVerts, dragonAttachedTriIds } from './Dragon.js';
