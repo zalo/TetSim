@@ -90,6 +90,15 @@ export default class Main {
         remeshedThreeMesh.position.set(2.0, 0.0, 0.0);
         this.world.scene.add(remeshedThreeMesh);
 
+
+        let tetrahedronGeo = this.createConformingTetrahedronMesh(simplifiedGeo.getAttribute("position").array, simplifiedGeo.getIndex().array);
+        let edgeMesh = new THREE.LineSegments(tetrahedronGeo, new THREE.LineBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+        edgeMesh.userData = this;    // for raycasting
+        edgeMesh.layers.enable(1);
+        edgeMesh.visible = true;
+        edgeMesh.position.set(3.1, 0.0, 0.0);
+        this.world.scene.add(edgeMesh);
+
         // Construct the physics world
         if (this.physicsParams.cpuSim) {
             this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
@@ -231,6 +240,78 @@ export default class Main {
         return remeshedBufferGeo;
     }
 
+    /** @returns {THREE.BufferGeometry} */
+    createConformingTetrahedronMesh(vertices, indices){
+        // First need to get the data into PhysX
+        let inputVertices = new px.PxArray_PxVec3(vertices.length/3);
+        let inputIndices  = new px.PxArray_PxU32 (indices.length);
+        for(let i = 0; i < vertices.length; i+=3){
+            inputVertices.set(i/3, new px.PxVec3(vertices[i], vertices[i+1], vertices[i+2]));
+        }
+        for(let i = 0; i < indices.length; i++){
+            inputIndices.set(i, indices[i]);
+            if(indices[i] < 0 || indices[i] >= inputVertices.size()){
+                console.log("Index out of range!", i, indices[i], inputVertices.size());
+            }
+        }
+
+        // Next need to make the PxBoundedData for both the vertices and indices to make the 'Simple'TriangleMesh
+        let vertexData = new px.PxBoundedData();
+        let indexData  = new px.PxBoundedData();
+        vertexData.set_count(inputVertices.size ());
+        vertexData.set_data (inputVertices.begin());
+        indexData .set_count(inputIndices .size ());
+        indexData .set_data (inputIndices .begin());
+        let simpleMesh = new px.PxSimpleTriangleMesh();
+        simpleMesh.set_points   (vertexData);
+        simpleMesh.set_triangles( indexData);
+
+        let analysis = px.PxTetMaker.prototype.validateTriangleMesh(simpleMesh);
+        if (!analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eVALID) || analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eMESH_IS_INVALID)){
+            console.log(  "eVALID",                                  analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eVALID),
+                        "\neZERO_VOLUME",                            analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eZERO_VOLUME),
+                        "\neOPEN_BOUNDARIES",                        analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eOPEN_BOUNDARIES),
+                        "\neSELF_INTERSECTIONS",                     analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eSELF_INTERSECTIONS),
+                        "\neINCONSISTENT_TRIANGLE_ORIENTATION",      analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eINCONSISTENT_TRIANGLE_ORIENTATION),
+                        "\neCONTAINS_ACUTE_ANGLED_TRIANGLES",        analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eCONTAINS_ACUTE_ANGLED_TRIANGLES),
+                        "\neEDGE_SHARED_BY_MORE_THAN_TWO_TRIANGLES", analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eEDGE_SHARED_BY_MORE_THAN_TWO_TRIANGLES),
+                        "\neCONTAINS_DUPLICATE_POINTS",              analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eCONTAINS_DUPLICATE_POINTS),
+                        "\neCONTAINS_INVALID_POINTS",                analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eCONTAINS_INVALID_POINTS),
+                        "\neREQUIRES_32BIT_INDEX_BUFFER",            analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eREQUIRES_32BIT_INDEX_BUFFER),
+                        "\neTRIANGLE_INDEX_OUT_OF_RANGE",            analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eTRIANGLE_INDEX_OUT_OF_RANGE),
+                        "\neMESH_IS_PROBLEMATIC",                    analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eMESH_IS_PROBLEMATIC),
+                        "\neMESH_IS_INVALID",                        analysis.isSet(px.PxTriangleMeshAnalysisResultEnum.eMESH_IS_INVALID));
+        }
+        
+        // Now we should be able to make the Conforming Tetrahedron Mesh
+        let outputVertices = new px.PxArray_PxVec3();
+        let outputIndices  = new px.PxArray_PxU32 ();
+        px.PxTetMaker.prototype.createConformingTetrahedronMesh(simpleMesh, outputVertices, outputIndices, true, 0.0001);
+
+        // Transform From PxVec3 to THREE.Vector3
+        let tetIndices = new Uint32Array(outputIndices.size());
+        for(let i = 0; i < tetIndices.length; i++){
+            tetIndices[i] = outputIndices.get(i);
+        }
+        let vertPositions = new Float32Array(outputVertices.size() * 3);
+        for(let i = 0; i < outputVertices.size(); i++){
+            let vec3 = outputVertices.get(i);
+            vertPositions[i*3+0] = vec3.get_x();
+            vertPositions[i*3+1] = vec3.get_y();
+            vertPositions[i*3+2] = vec3.get_z();
+        }
+        let remeshedBufferGeo = new THREE.BufferGeometry();
+        remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
+        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(tetIndices, 1));
+        inputVertices .__destroy__();
+        inputIndices  .__destroy__();
+        vertexData    .__destroy__();
+        indexData     .__destroy__();
+        simpleMesh    .__destroy__();
+        outputVertices.__destroy__();
+        outputIndices .__destroy__();
+        return remeshedBufferGeo;
+    }
 }
 
 new Main();
