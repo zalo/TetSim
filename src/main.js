@@ -84,12 +84,11 @@ export default class Main {
             spherelessBox.delete();
         }
         
-        let remeshedGeo   = this.remesh(sphereMesh.vertProperties, sphereMesh.triVerts, 8);
-        let simplifiedGeo = this.simplifyMesh(remeshedGeo.getAttribute("position").array, remeshedGeo.getIndex().array, 500, 100.0);
+        let remeshedGeo   = this.remesh(sphereMesh.vertProperties, sphereMesh.triVerts, 10);
+        let simplifiedGeo = this.simplifyMesh(remeshedGeo.getAttribute("position").array, remeshedGeo.getIndex().array, 1000, 100.0);
         let remeshedThreeMesh = new THREE.Mesh(simplifiedGeo, new THREE.MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
         remeshedThreeMesh.position.set(2.0, 0.0, 0.0);
         this.world.scene.add(remeshedThreeMesh);
-
 
         let tetrahedronGeo = this.createConformingTetrahedronMesh(simplifiedGeo.getAttribute("position").array, simplifiedGeo.getIndex().array);
         let edgeMesh = new THREE.LineSegments(tetrahedronGeo, new THREE.LineBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
@@ -260,7 +259,7 @@ export default class Main {
         let indexData  = new px.PxBoundedData();
         vertexData.set_count(inputVertices.size ());
         vertexData.set_data (inputVertices.begin());
-        indexData .set_count(inputIndices .size ());
+        indexData .set_count(inputIndices .size ()/3);
         indexData .set_data (inputIndices .begin());
         let simpleMesh = new px.PxSimpleTriangleMesh();
         simpleMesh.set_points   (vertexData);
@@ -286,13 +285,37 @@ export default class Main {
         // Now we should be able to make the Conforming Tetrahedron Mesh
         let outputVertices = new px.PxArray_PxVec3();
         let outputIndices  = new px.PxArray_PxU32 ();
-        px.PxTetMaker.prototype.createConformingTetrahedronMesh(simpleMesh, outputVertices, outputIndices, true, 0.0001);
+        px.PxTetMaker.prototype.createConformingTetrahedronMesh(simpleMesh, outputVertices, outputIndices, true, 0.0);
 
         // Transform From PxVec3 to THREE.Vector3
         let tetIndices = new Uint32Array(outputIndices.size());
         for(let i = 0; i < tetIndices.length; i++){
             tetIndices[i] = outputIndices.get(i);
         }
+
+        console.log("In Out Vert Num Comparison:", inputVertices.size(), outputVertices.size());
+
+        // Transform from Tet Indices to Edge Indices
+        let segIndices = new Uint32Array((outputIndices.size()/4) * 12);
+        for(let i = 0; i < outputIndices.size()/4; i++){
+            let a = outputIndices.get(i * 4 + 0);
+            let b = outputIndices.get(i * 4 + 1);
+            let c = outputIndices.get(i * 4 + 2);
+            let d = outputIndices.get(i * 4 + 3);
+            segIndices[i*12+0]  = a;
+            segIndices[i*12+1]  = b;
+            segIndices[i*12+2]  = a;
+            segIndices[i*12+3]  = c;
+            segIndices[i*12+4]  = a;
+            segIndices[i*12+5]  = d;
+            segIndices[i*12+6]  = b;
+            segIndices[i*12+7]  = c;
+            segIndices[i*12+8]  = b;
+            segIndices[i*12+9]  = d;
+            segIndices[i*12+10] = c;
+            segIndices[i*12+11] = d;
+        }
+
         let vertPositions = new Float32Array(outputVertices.size() * 3);
         for(let i = 0; i < outputVertices.size(); i++){
             let vec3 = outputVertices.get(i);
@@ -302,7 +325,7 @@ export default class Main {
         }
         let remeshedBufferGeo = new THREE.BufferGeometry();
         remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
-        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(tetIndices, 1));
+        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(segIndices, 1));
         inputVertices .__destroy__();
         inputIndices  .__destroy__();
         vertexData    .__destroy__();
