@@ -444,7 +444,7 @@ export class SoftBodyGPU {
             shadowWorldPosition = worldPosition + vec4( shadowWorldNormal * directionalLightShadows[ 0 ].shadowNormalBias, 0 );
             vDirectionalShadowCoord[ 0 ] = directionalShadowMatrix[ 0 ] * shadowWorldPosition;
             shadowWorldPosition = worldPosition + vec4( shadowWorldNormal * spotLightShadows[ 0 ].shadowNormalBias, 0 );
-            vSpotShadowCoord[ 0 ] = spotShadowMatrix[ 0 ] * shadowWorldPosition;
+            //vSpotShadowCoord[ 0 ] = spotShadowMatrix[ 0 ] * shadowWorldPosition;
         }`;
 
         // visual embedded mesh
@@ -501,6 +501,17 @@ export class SoftBodyGPU {
             this.particleToElemVertsTable[7].image.data[i] = -1.0;
             this.particleToElemVertsTable[8].image.data[i] = -1.0;
         }
+        this.vel0                       .needsUpdate = true;
+        this.invMass                    .needsUpdate = true;
+        this.particleToElemVertsTable[0].needsUpdate = true;
+        this.particleToElemVertsTable[1].needsUpdate = true;
+        this.particleToElemVertsTable[2].needsUpdate = true;
+        this.particleToElemVertsTable[3].needsUpdate = true;
+        this.particleToElemVertsTable[4].needsUpdate = true;
+        this.particleToElemVertsTable[5].needsUpdate = true;
+        this.particleToElemVertsTable[6].needsUpdate = true;
+        this.particleToElemVertsTable[7].needsUpdate = true;
+        this.particleToElemVertsTable[8].needsUpdate = true;
 
         // Initialize the positions of the vertices
         //this.pos0                     // Set to vertices
@@ -510,6 +521,7 @@ export class SoftBodyGPU {
             this.pos0.image.data[i+1] = this.inputPos[posIndex++];
             this.pos0.image.data[i+2] = this.inputPos[posIndex++];
         }
+        this.pos0.needsUpdate = true;
 
         this.oldrestingPose = new Float32Array(9 * this.numElems);
         let biggestT = 0;
@@ -570,17 +582,27 @@ export class SoftBodyGPU {
             let V = this.matGetDeterminant(this.oldrestingPose, i) / 6.0;
 
             let pm = V / 4.0 * density;
-            this.invMass      .image.data[id0 * 4] += pm;
-            this.invMass      .image.data[id1 * 4] += pm;
-            this.invMass      .image.data[id2 * 4] += pm;
-            this.invMass      .image.data[id3 * 4] += pm;
+            this.invMass              .image.data[id0 * 4] += pm;
+            this.invMass              .image.data[id1 * 4] += pm;
+            this.invMass              .image.data[id2 * 4] += pm;
+            this.invMass              .image.data[id3 * 4] += pm;
             this.invRestVolumeAndColor.image.data[(i * 4) + 0] = 1.0 / V; // Set InvMass
             this.invRestVolumeAndColor.image.data[(i * 4) + 1] = -1.0;    // Mark Color as Undefined
         }
+        this.elems0[0].needsUpdate = true;
+        this.elems0[1].needsUpdate = true;
+        this.elems0[2].needsUpdate = true;
+        this.elems0[3].needsUpdate = true;
+        this.particleToElemVertsTable.needsUpdate = true;
+        this.elemToParticlesTable.needsUpdate = true;
+        this.quats0.needsUpdate = true;
+        this.particleToElemVertsTable.needsUpdate = true;
+        this.invRestVolumeAndColor.needsUpdate = true;
 
         for (let i = 0; i < this.invMass.image.data.length; i++) {
             if (this.invMass.image.data[i] != 0.0) { this.invMass.image.data[i] = 1.0 / this.invMass.image.data[i]; }
         }
+        this.invMass.needsUpdate = true;
 
         console.log(biggestT);
     }

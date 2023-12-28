@@ -406,7 +406,9 @@ class MultiTargetGPUComputationRenderer {
         this.createTexture = function () {
 
             const data = new Float32Array(sizeX * sizeY * 4);
-            return new DataTexture(data, sizeX, sizeY, RGBAFormat, FloatType);
+            let texture = new DataTexture(data, sizeX, sizeY, RGBAFormat, FloatType);
+            this.needsUpdate = true;
+            return texture;
 
         };
 
