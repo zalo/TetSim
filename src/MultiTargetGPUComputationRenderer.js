@@ -3,6 +3,7 @@ import {
 	ClampToEdgeWrapping,
 	DataTexture,
 	FloatType,
+	HalfFloatType,
 	Mesh,
 	NearestFilter,
 	PlaneGeometry,
@@ -117,7 +118,7 @@ class MultiTargetGPUComputationRenderer {
 
         this.variables = [];
 
-        let dataType = FloatType;
+        let dataType = FloatType;//HalfFloatType;//
 
         this.passes = [];
 
@@ -135,12 +136,9 @@ class MultiTargetGPUComputationRenderer {
         const mesh = new Mesh(new PlaneGeometry(2, 2), passThruShader);
         scene.add(mesh);
 
-
         this.setDataType = function (type) {
-
             dataType = type;
             return this;
-
         };
 
         this.addVariable = function (variableName, initialValueTexture, count) {
@@ -422,58 +420,82 @@ class MultiTargetGPUComputationRenderer {
 
             if (output.isWebGLMultipleRenderTargets) {
 
-                let multiPassthroughShader = createShaderMaterial(`
-                layout(location = 0) out highp vec4 tex0;
-                layout(location = 1) out highp vec4 tex1;
-                layout(location = 2) out highp vec4 tex2;
-                layout(location = 3) out highp vec4 tex3;
-                uniform sampler2D[4] passThruTexture;
-                void main() {
-                    vec2 uv = gl_FragCoord.xy / resolution.xy;
-                    tex0 = texture2D( passThruTexture[0], uv );
-                    tex1 = texture2D( passThruTexture[1], uv );
-                    tex2 = texture2D( passThruTexture[2], uv );
-                    tex3 = texture2D( passThruTexture[3], uv );
-                }`, passThruUniforms)
+                let multiPassthroughShader = null;
+                if( input ) {
+
+                    multiPassthroughShader = createShaderMaterial(`
+                        layout(location = 0) out highp vec4 tex0;
+                        layout(location = 1) out highp vec4 tex1;
+                        layout(location = 2) out highp vec4 tex2;
+                        layout(location = 3) out highp vec4 tex3;
+                        uniform sampler2D[4] passThruTexture;
+                        void main() {
+                            vec2 uv = gl_FragCoord.xy / resolution.xy;
+                            tex0 = texture2D( passThruTexture[0], uv );
+                            tex1 = texture2D( passThruTexture[1], uv );
+                            tex2 = texture2D( passThruTexture[2], uv );
+                            tex3 = texture2D( passThruTexture[3], uv );
+                        }`, passThruUniforms);
+
+                } else {
+
+                    multiPassthroughShader = createShaderMaterial(`
+                        layout(location = 0) out highp vec4 tex0;
+                        layout(location = 1) out highp vec4 tex1;
+                        layout(location = 2) out highp vec4 tex2;
+                        layout(location = 3) out highp vec4 tex3;
+                        uniform sampler2D[4] passThruTexture;
+                        void main() {
+                            tex0 = vec4(0.0, 0.0, 0.0, 1.0);
+                            tex1 = vec4(0.0, 0.0, 0.0, 1.0);
+                            tex2 = vec4(0.0, 0.0, 0.0, 1.0);
+                            tex3 = vec4(0.0, 0.0, 0.0, 1.0);
+                        }`, passThruUniforms);
+
+                }
+
                 this.doRenderTarget(multiPassthroughShader, output);
             } else {
                 this.doRenderTarget(passThruShader, output);
             }
-            
 
             passThruUniforms.passThruTexture.value = null;
 
         };
 
         this.doRenderTarget = function (material, output) {
-
             const currentRenderTarget = renderer.getRenderTarget();
-
             mesh.material = material;
             renderer.setRenderTarget(output);
             renderer.render(scene, camera);
             mesh.material = passThruShader;
-
             renderer.setRenderTarget(currentRenderTarget);
-
         };
+
+        this.dispose = function(){
+            for (let i = 0; i < this.passes; i++) {
+                this.passes[i].material.dispose();
+            }
+
+            for (let i = 0; i < this.variables.length; i++) {
+                this.variables[i].renderTargets[0].dispose();
+                this.variables[i].renderTargets[1].dispose();
+            }
+
+            passThruShader.dispose();
+        }
 
         // Shaders
 
         function getPassThroughVertexShader() {
             return `
-			in vec3 position;
-
-			uniform mat4 modelViewMatrix;
-			uniform mat4 projectionMatrix;
-
-			void main() {
-
-				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-
-				gl_Position = projectionMatrix * mvPosition;
-
-			}`
+            in vec3 position;
+            uniform mat4 modelViewMatrix;
+            uniform mat4 projectionMatrix;
+            void main() {
+                vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+                gl_Position = projectionMatrix * mvPosition;
+            }`
         }
 
         function getPassThroughFragmentShader() {
@@ -481,15 +503,12 @@ class MultiTargetGPUComputationRenderer {
             return `
             out highp vec4 pc_fragColor;
             uniform sampler2D passThruTexture;
-                void main() {
-                	vec2 uv = gl_FragCoord.xy / resolution.xy;
-                	pc_fragColor = texture2D( passThruTexture, uv );
-                }`;
-
+            void main() {
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
+                pc_fragColor = texture2D( passThruTexture, uv );
+            }`;
         }
-
     }
-
 }
 
 export { MultiTargetGPUComputationRenderer };
