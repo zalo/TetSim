@@ -15,6 +15,7 @@ export default class World {
         
         // camera and world
         this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color( 0x000000 );
 
         this.camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.01, 1000 );
         this.camera.position.set( 0.0, 1, 4 );
@@ -50,7 +51,7 @@ export default class World {
         // Geometry
 
         this.ground = new THREE.Mesh(
-            new THREE.PlaneBufferGeometry( 20, 20, 1, 1 ),
+            new THREE.PlaneGeometry( 20, 20, 1, 1 ),
             new THREE.MeshPhongMaterial( { color: 0xa0adaf, shininess: 150 } )
         );				
 
