@@ -4,6 +4,8 @@ import { SoftBody, Grabber } from './Softbody.js';
 import { SoftBodyGPU, GPUGrabber } from './SoftbodyGPU.js';
 import { dragonTetVerts, dragonTetIds, dragonTetEdgeIds, dragonAttachedVerts, dragonAttachedTriIds } from './Dragon.js';
 import World from './World.js';
+import ManifoldModule from '../node_modules/manifold-3d/manifold.js';
+//import { PhysX } from './physx-js-webidl/dist/physx-js-webidl.js';
 
 /** The fundamental set up and animation structures for 3D Visualization */
 export default class Main {
@@ -16,7 +18,10 @@ export default class Main {
             this.display((path[path.length - 1] + ":" + event.lineno + " - " + event.message));
         });
         console.error = this.fakeError.bind(this);
-
+        this.physicsScene = { softBodies: [] };
+        this.deferredConstructor();
+    }
+    async deferredConstructor() {
         // Configure Settings
         let cpuSim = new URLSearchParams(window.location.search).get('cpu') === 'true';
         this.physicsParams = {
@@ -47,8 +52,78 @@ export default class Main {
         // Construct the render world
         this.world = new World(this);
 
+        // Construct Test Shape
+        const manifold = await ManifoldModule();
+        manifold.setup();
+        /** @type {manifold.Manifold} */
+        let sphere = new manifold.Manifold.sphere(0.6, 32);
+        /** @type {manifold.Manifold} */
+        let box    = new manifold.Manifold.cube([1.0, 1.0, 1.0], true);
+        /** @type {manifold.Manifold} */
+        let spherelessBox = new manifold.Manifold.difference(box, sphere).translate([0.0, 1.0, 0.0]);
+        /** @type {manifold.Mesh} */
+        let sphereMesh = spherelessBox.getMesh();
+        if(sphereMesh.numProp == 3){
+            let bufferGeo = new THREE.BufferGeometry();
+            bufferGeo.setAttribute('position', new THREE.BufferAttribute(sphereMesh.vertProperties, 3));
+            bufferGeo.setIndex(new THREE.BufferAttribute(sphereMesh.triVerts, 1));
+            bufferGeo.computeVertexNormals();
+            let threeMesh = new THREE.Mesh(bufferGeo, new THREE.MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
+            threeMesh.position.set(0.75, 0.0, 0.0);
+            this.world.scene.add(threeMesh);
+            sphere.delete();
+            box.delete();
+            spherelessBox.delete();
+        }
+
+        // Tetrahedralize the test shape
+        const px = await PhysX();
+        let version    = px.PHYSICS_VERSION;
+        let allocator  = new px.PxDefaultAllocator();
+        let errorCb    = new px.PxDefaultErrorCallback();
+        let foundation = px.CreateFoundation(version, allocator, errorCb);
+        console.log('PhysX loaded! Version: ' + ((version >> 24) & 0xff) + '.' + ((version >> 16) & 0xff) + '.' + ((version >> 8) & 0xff));
+
+        let inputVertices  = new px.PxArray_PxVec3(sphereMesh.vertProperties.length/3);
+        let inputIndices   = new px.PxArray_PxU32 (sphereMesh.triVerts.length);
+        for(let i = 0; i < sphereMesh.vertProperties.length; i+=3){
+            inputVertices.set(i/3, new px.PxVec3(sphereMesh.vertProperties[i], sphereMesh.vertProperties[i+1], sphereMesh.vertProperties[i+2]));
+        }
+        for(let i = 0; i < sphereMesh.triVerts.length; i++){
+            inputIndices.set(i, sphereMesh.triVerts[i]);
+        }
+        let outputVertices = new px.PxArray_PxVec3();
+        let outputIndices  = new px.PxArray_PxU32 ();
+        let vertexMap      = new px.PxArray_PxU32 ();
+        let remesherGridResolution = 20;
+        px.PxTetMaker.prototype.remeshTriangleMesh(inputVertices, inputIndices, remesherGridResolution, outputVertices, outputIndices, vertexMap);
+
+        // Transform From PxVec3 to THREE.Vector3
+        let triIndices = new Uint32Array(outputIndices.size());
+        for(let i = 0; i < triIndices.length; i++){
+            triIndices[i] = outputIndices.get(i);
+        }
+        let vertPositions = new Float32Array(outputVertices.size() * 3);
+        for(let i = 0; i < outputVertices.size(); i++){
+            let vec3 = outputVertices.get(i);
+            vertPositions[i*3+0] = vec3.get_x();
+            vertPositions[i*3+1] = vec3.get_y();
+            vertPositions[i*3+2] = vec3.get_z();
+        }
+        let remeshedBufferGeo = new THREE.BufferGeometry();
+        remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
+        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
+        remeshedBufferGeo.computeVertexNormals();
+        let remeshedThreeMesh = new THREE.Mesh(remeshedBufferGeo, new THREE.MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
+        remeshedThreeMesh.position.set(2.0, 0.0, 0.0);
+        this.world.scene.add(remeshedThreeMesh);
+        inputVertices .__destroy__();
+        inputIndices  .__destroy__();
+        outputVertices.__destroy__();
+        outputIndices .__destroy__();
+        vertexMap     .__destroy__();
+
         // Construct the physics world
-        this.physicsScene = { softBodies: [] };
         if (this.physicsParams.cpuSim) {
             this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
                 dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhysicalMaterial({ color: 0xf78a1d }));
@@ -74,6 +149,8 @@ export default class Main {
     update() {
         //this.physicsParams.timeStep += (((performance.now()*0.001) - this.previousTime) - this.physicsParams.timeStep) * 0.01;
         //this.previousTime = performance.now()*0.001;
+
+        if(this.physicsScene.softBodies.length == 0) { return; }
 
         // Simulate all of the soft bodies in the scene
         let dt = (this.physicsParams.timeScale * this.physicsParams.timeStep) / this.physicsParams.numSubsteps;
