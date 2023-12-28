@@ -7,6 +7,14 @@ import World from './World.js';
 import ManifoldModule from '../node_modules/manifold-3d/manifold.js';
 //import { PhysX } from './physx-js-webidl/dist/physx-js-webidl.js';
 
+// Tetrahedralize the test shape
+const px = await PhysX();
+let version    = px.PHYSICS_VERSION;
+var allocator  = new px.PxDefaultAllocator();
+var errorCb    = new px.PxDefaultErrorCallback();
+var foundation = px.CreateFoundation(version, allocator, errorCb);
+console.log('PhysX loaded! Version: ' + ((version >> 24) & 0xff) + '.' + ((version >> 16) & 0xff) + '.' + ((version >> 8) & 0xff));
+
 /** The fundamental set up and animation structures for 3D Visualization */
 export default class Main {
 
@@ -75,53 +83,12 @@ export default class Main {
             box.delete();
             spherelessBox.delete();
         }
-
-        // Tetrahedralize the test shape
-        const px = await PhysX();
-        let version    = px.PHYSICS_VERSION;
-        let allocator  = new px.PxDefaultAllocator();
-        let errorCb    = new px.PxDefaultErrorCallback();
-        let foundation = px.CreateFoundation(version, allocator, errorCb);
-        console.log('PhysX loaded! Version: ' + ((version >> 24) & 0xff) + '.' + ((version >> 16) & 0xff) + '.' + ((version >> 8) & 0xff));
-
-        let inputVertices  = new px.PxArray_PxVec3(sphereMesh.vertProperties.length/3);
-        let inputIndices   = new px.PxArray_PxU32 (sphereMesh.triVerts.length);
-        for(let i = 0; i < sphereMesh.vertProperties.length; i+=3){
-            inputVertices.set(i/3, new px.PxVec3(sphereMesh.vertProperties[i], sphereMesh.vertProperties[i+1], sphereMesh.vertProperties[i+2]));
-        }
-        for(let i = 0; i < sphereMesh.triVerts.length; i++){
-            inputIndices.set(i, sphereMesh.triVerts[i]);
-        }
-        let outputVertices = new px.PxArray_PxVec3();
-        let outputIndices  = new px.PxArray_PxU32 ();
-        let vertexMap      = new px.PxArray_PxU32 ();
-        let remesherGridResolution = 20;
-        px.PxTetMaker.prototype.remeshTriangleMesh(inputVertices, inputIndices, remesherGridResolution, outputVertices, outputIndices, vertexMap);
-
-        // Transform From PxVec3 to THREE.Vector3
-        let triIndices = new Uint32Array(outputIndices.size());
-        for(let i = 0; i < triIndices.length; i++){
-            triIndices[i] = outputIndices.get(i);
-        }
-        let vertPositions = new Float32Array(outputVertices.size() * 3);
-        for(let i = 0; i < outputVertices.size(); i++){
-            let vec3 = outputVertices.get(i);
-            vertPositions[i*3+0] = vec3.get_x();
-            vertPositions[i*3+1] = vec3.get_y();
-            vertPositions[i*3+2] = vec3.get_z();
-        }
-        let remeshedBufferGeo = new THREE.BufferGeometry();
-        remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
-        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
-        remeshedBufferGeo.computeVertexNormals();
-        let remeshedThreeMesh = new THREE.Mesh(remeshedBufferGeo, new THREE.MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
+        
+        let remeshedGeo   = this.remesh(sphereMesh.vertProperties, sphereMesh.triVerts, 8);
+        let simplifiedGeo = this.simplifyMesh(remeshedGeo.getAttribute("position").array, remeshedGeo.getIndex().array, 500, 100.0);
+        let remeshedThreeMesh = new THREE.Mesh(simplifiedGeo, new THREE.MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
         remeshedThreeMesh.position.set(2.0, 0.0, 0.0);
         this.world.scene.add(remeshedThreeMesh);
-        inputVertices .__destroy__();
-        inputIndices  .__destroy__();
-        outputVertices.__destroy__();
-        outputIndices .__destroy__();
-        vertexMap     .__destroy__();
 
         // Construct the physics world
         if (this.physicsParams.cpuSim) {
@@ -182,6 +149,86 @@ export default class Main {
         let errorNode = window.document.createElement("div");
         errorNode.innerHTML = text.fontcolor("red");
         window.document.getElementById("info").appendChild(errorNode);
+    }
+
+    /** @returns {THREE.BufferGeometry} */
+    remesh(vertices, indices, remesherGridResolution = 20){
+        let inputVertices  = new px.PxArray_PxVec3(vertices.length/3);
+        let inputIndices   = new px.PxArray_PxU32 (indices.length);
+        for(let i = 0; i < vertices.length; i+=3){
+            inputVertices.set(i/3, new px.PxVec3(vertices[i], vertices[i+1], vertices[i+2]));
+        }
+        for(let i = 0; i < indices.length; i++){
+            inputIndices.set(i, indices[i]);
+        }
+
+        let outputVertices = new px.PxArray_PxVec3();
+        let outputIndices  = new px.PxArray_PxU32 ();
+        let vertexMap      = new px.PxArray_PxU32 ();
+        px.PxTetMaker.prototype.remeshTriangleMesh(inputVertices, inputIndices, remesherGridResolution, outputVertices, outputIndices, vertexMap);
+
+        // Transform From PxVec3 to THREE.Vector3
+        let triIndices = new Uint32Array(outputIndices.size());
+        for(let i = 0; i < triIndices.length; i++){
+            triIndices[i] = outputIndices.get(i);
+        }
+        let vertPositions = new Float32Array(outputVertices.size() * 3);
+        for(let i = 0; i < outputVertices.size(); i++){
+            let vec3 = outputVertices.get(i);
+            vertPositions[i*3+0] = vec3.get_x();
+            vertPositions[i*3+1] = vec3.get_y();
+            vertPositions[i*3+2] = vec3.get_z();
+        }
+        let remeshedBufferGeo = new THREE.BufferGeometry();
+        remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
+        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
+        remeshedBufferGeo.computeVertexNormals();
+        inputVertices .__destroy__();
+        inputIndices  .__destroy__();
+        outputVertices.__destroy__();
+        outputIndices .__destroy__();
+        vertexMap     .__destroy__();
+        return remeshedBufferGeo;
+    }
+
+    /** @returns {THREE.BufferGeometry} */
+    simplifyMesh(vertices, indices, targetTriangleCount = 5000, maximalTriangleEdgeLength = 110.0){
+        let inputVertices  = new px.PxArray_PxVec3(vertices.length/3);
+        let inputIndices   = new px.PxArray_PxU32 (indices.length);
+        for(let i = 0; i < vertices.length; i+=3){
+            inputVertices.set(i/3, new px.PxVec3(vertices[i], vertices[i+1], vertices[i+2]));
+        }
+        for(let i = 0; i < indices.length; i++){
+            inputIndices.set(i, indices[i]);
+        }
+
+        let outputVertices = new px.PxArray_PxVec3();
+        let outputIndices  = new px.PxArray_PxU32 ();
+        px.PxTetMaker.prototype.simplifyTriangleMesh(inputVertices, inputIndices, targetTriangleCount, maximalTriangleEdgeLength, outputVertices, outputIndices);
+
+        console.log(inputVertices.size(), inputIndices.size(), outputVertices.size(), outputIndices.size());
+
+        // Transform From PxVec3 to THREE.Vector3
+        let triIndices = new Uint32Array(outputIndices.size());
+        for(let i = 0; i < triIndices.length; i++){
+            triIndices[i] = outputIndices.get(i);
+        }
+        let vertPositions = new Float32Array(outputVertices.size() * 3);
+        for(let i = 0; i < outputVertices.size(); i++){
+            let vec3 = outputVertices.get(i);
+            vertPositions[i*3+0] = vec3.get_x();
+            vertPositions[i*3+1] = vec3.get_y();
+            vertPositions[i*3+2] = vec3.get_z();
+        }
+        let remeshedBufferGeo = new THREE.BufferGeometry();
+        remeshedBufferGeo.setAttribute('position', new THREE.BufferAttribute(vertPositions, 3));
+        remeshedBufferGeo.setIndex(new THREE.BufferAttribute(triIndices, 1));
+        remeshedBufferGeo.computeVertexNormals();
+        inputVertices .__destroy__();
+        inputIndices  .__destroy__();
+        outputVertices.__destroy__();
+        outputIndices .__destroy__();
+        return remeshedBufferGeo;
     }
 
 }
