@@ -410,7 +410,7 @@ export class SoftBodyGPU {
                  gl_Position = projectionMatrix * mvPosition;
             }`;
             
-            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) } //this.pos.texture };
+            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos).texture } //this.pos.texture };
         };
         this.geometry = new THREE.BufferGeometry();
         this.geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
@@ -465,8 +465,8 @@ export class SoftBodyGPU {
             shader.vertexShader =
                  shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
                  shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMainColor;
-            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+            shader.uniforms.texturePos = { value: this.gpuCompute.getCurrentRenderTarget(this.pos).texture  }
+            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats).texture  }
             shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
         };
         this.visMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
@@ -475,8 +475,8 @@ export class SoftBodyGPU {
             shader.vertexShader =
                  shader.vertexShader.slice(0, bodyStart) + vertShaderInit +
                  shader.vertexShader.slice(bodyStart - 1, - 1) + vertShaderMain.slice(0, -1) + "vHighPrecisionZW = gl_Position.zw;}";
-            shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos) }
-            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats) }
+            shader.uniforms.texturePos  = { value: this.gpuCompute.getCurrentRenderTarget(this.pos).texture  }
+            shader.uniforms.textureQuat = { value: this.gpuCompute.getCurrentRenderTarget(this.quats).texture  }
             shader.uniforms.elemToParticlesTable = { value: this.elemToParticlesTable }
         };
 
