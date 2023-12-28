@@ -15,14 +15,14 @@ export default class World {
         
         // camera and world
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color( 0x000000 );
+        this.scene.background = new THREE.Color( 0x999DB1 );
 
         this.camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.01, 1000 );
         this.camera.position.set( 0.0, 1, 4 );
         this.camera.layers.enableAll();
         this.scene.add(this.camera);
 
-        this.spotLight = new THREE.SpotLight( 0xffffff );
+        this.spotLight = new THREE.SpotLight( 0xffffff, Math.PI * 10.0 );
         this.spotLight.angle = Math.PI / 5;
         this.spotLight.penumbra = 0.2;
         this.spotLight.position.set( 2, 3, 3 );
@@ -33,7 +33,7 @@ export default class World {
         this.spotLight.shadow.mapSize.height = 1024;
         this.scene.add( this.spotLight );
 
-        this.dirLight = new THREE.DirectionalLight( 0x55505a, 1 );
+        this.dirLight = new THREE.DirectionalLight( 0x55505a, Math.PI * 10.0 );
         this.dirLight.position.set( 0, 3, 0 );
         this.dirLight.castShadow = true;
         this.dirLight.shadow.camera.near = -10;

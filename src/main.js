@@ -51,14 +51,14 @@ export default class Main {
         this.physicsScene = { softBodies: [] };
         if (this.physicsParams.cpuSim) {
             this.dragon = new SoftBody(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }));
+                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhysicalMaterial({ color: 0xf78a1d }));
             this.physicsScene.softBodies.push(this.dragon);
             this.grabber = new Grabber(
                 this.world.scene, this.world.renderer, this.world.camera,
                 this.world.container.parentElement, this.world.controls);
         } else {
             this.dragon = new SoftBodyGPU(dragonTetVerts, dragonTetIds, dragonTetEdgeIds, this.physicsParams,
-                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhongMaterial({ color: 0xf78a1d }), this.world);
+                dragonAttachedVerts, dragonAttachedTriIds, new THREE.MeshPhysicalMaterial({ color: 0xf78a1d, roughness:0.4 }), this.world);
             this.physicsScene.softBodies.push(this.dragon);
             this.grabber = new GPUGrabber(
                 this.world.scene, this.world.renderer, this.world.camera,
